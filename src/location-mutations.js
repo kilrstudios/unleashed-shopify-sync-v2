@@ -131,7 +131,7 @@ async function createLocationsBatch(baseUrl, headers, locationsToCreate) {
         if (locationData.warehouseCode) {
           locationInput.metafields = [
             {
-              namespace: "unleashed",
+              namespace: "custom",
               key: "warehouse_code",
               value: locationData.warehouseCode,
               type: "single_line_text_field"
@@ -225,7 +225,7 @@ async function updateLocationsBatch(baseUrl, headers, locationsToUpdate) {
         if (locationData.warehouseCode) {
           locationInput.metafields = [
             {
-              namespace: "unleashed",
+              namespace: "custom",
               key: "warehouse_code",
               value: locationData.warehouseCode,
               type: "single_line_text_field"
@@ -233,17 +233,12 @@ async function updateLocationsBatch(baseUrl, headers, locationsToUpdate) {
           ];
         }
 
-        // Add gid prefix if not present
-        const locationId = locationData.id.startsWith('gid://') 
-          ? locationData.id 
-          : `gid://shopify/Location/${locationData.id}`;
-
         const mutationResult = await executeMutation(
           baseUrl,
           headers,
           UPDATE_LOCATION_MUTATION,
           { 
-            id: locationId,
+            id: locationData.id,
             input: locationInput 
           }
         );
@@ -367,4 +362,4 @@ async function mutateLocations(authData, mappingResults) {
   return results;
 }
 
-export { mutateLocations }; 
+export { mutateLocations };

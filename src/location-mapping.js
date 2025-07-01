@@ -79,32 +79,25 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           PhoneNumber: warehouse.PhoneNumber
         });
 
-        // Generate location name as per mapping rules
-        const locationName = `${warehouse.WarehouseCode} - ${warehouse.WarehouseName}`;
+        // Generate location name (no longer including warehouse code)
+        const locationName = warehouse.WarehouseName;
         console.log(`   🏷️ Generated location name: "${locationName}"`);
 
-        // Track country mapping
-        const originalCountry = warehouse.Country;
-        const mappedCountryCode = COUNTRY_CODE_MAPPING[originalCountry] || originalCountry;
-        if (originalCountry !== mappedCountryCode) {
-          console.log(`   🌍 Country mapped: "${originalCountry}" → "${mappedCountryCode}"`);
-          results.mappingDetails.countryMappings[originalCountry] = mappedCountryCode;
+        // Map country code if present
+        let mappedCountryCode = null;
+        if (warehouse.Country) {
+            mappedCountryCode = COUNTRY_CODE_MAPPING[warehouse.Country] || warehouse.Country;
+            console.log(`   🌍 Country mapped: "${warehouse.Country}" → "${mappedCountryCode}"`);
         } else {
-          console.log(`   🌍 Country unchanged: "${originalCountry}"`);
+            console.log(`   🌍 Country unchanged: "null"`);
         }
 
-        // Track province/state mapping  
-        const originalRegion = warehouse.Region;
-        const mappedProvinceCode = PROVINCE_CODE_MAPPING[originalRegion] || originalRegion;
-        if (originalRegion !== mappedProvinceCode) {
-          console.log(`   🏛️ Province mapped: "${originalRegion}" → "${mappedProvinceCode}"`);
-          results.mappingDetails.provinceMappings[originalRegion] = mappedProvinceCode;
-        } else {
-          console.log(`   🏛️ Province unchanged: "${originalRegion}"`);
-        }
+        // Map province/state code if present
+        let mappedProvinceCode = warehouse.Region;
+        console.log(`   🏛️ Province unchanged: "${mappedProvinceCode}"`);
 
-        // Find matching Shopify location
         console.log(`   🔍 Searching for matching Shopify location with name: "${locationName}"`);
+
         const matchingLocation = shopifyLocations.find(loc => 
           loc.name === locationName
         );
@@ -136,10 +129,15 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           console.log(`   ✅ Match found! Existing location ID: ${matchingLocation.id}`);
           console.log(`   🔄 Will UPDATE existing location`);
           
-          locationData.id = matchingLocation.id;
+          // Ensure location ID has the proper Shopify format
+          const locationId = matchingLocation.id.startsWith('gid://') 
+            ? matchingLocation.id 
+            : `gid://shopify/Location/${matchingLocation.id}`;
+          
+          locationData.id = locationId;
           results.toUpdate.push(locationData);
           matchResult.action = 'update';
-          matchResult.existingLocationId = matchingLocation.id;
+          matchResult.existingLocationId = locationId;
           
           // Log the differences for updates
           console.log(`   📝 Comparing current vs new data:`);

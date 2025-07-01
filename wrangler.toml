@@ -1,0 +1,7 @@
+name = "unleashed-shopify-sync-v2"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "AUTH_STORE"
+id = "f561e9dfc8774ea4bb5fc9a877bbb8c4" 

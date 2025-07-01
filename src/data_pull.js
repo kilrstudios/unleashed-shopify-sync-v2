@@ -1,0 +1,272 @@
+// src/data_pull.js
+
+// Helper function to get auth data from KV store
+async function getAuthData(kvStore, domain) {
+  try {
+    const authString = await kvStore.get(domain);
+    if (!authString) {
+      throw new Error(`No authentication data found for domain: ${domain}`);
+    }
+    return JSON.parse(authString);
+  } catch (error) {
+    console.error('Error getting auth data:', error);
+    throw new Error(`Failed to get authentication data: ${error.message}`);
+  }
+}
+
+// Helper: Generate HMAC-SHA256 signature for Unleashed API authentication
+async function generateUnleashedSignature(queryString, apiKey) {
+  const encoder = new TextEncoder();
+  const keyBuffer = encoder.encode(apiKey);
+  const dataBuffer = encoder.encode(queryString);
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyBuffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
+  const base64Signature = btoa(String.fromCharCode(...new Uint8Array(signature)));
+  return base64Signature;
+}
+
+// Helper: Create headers for Unleashed API requests
+async function createUnleashedHeaders(endpoint, apiKey, apiId) {
+  const url = new URL(endpoint);
+  const queryString = url.search ? url.search.substring(1) : '';
+  const signature = await generateUnleashedSignature(queryString, apiKey);
+  return {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'api-auth-id': apiId,
+    'api-auth-signature': signature,
+    'Client-Type': 'kilr/unleashedshopify'
+  };
+}
+
+// Fetch Unleashed data
+async function fetchUnleashedData(authData) {
+  const results = {};
+  
+  // Products
+  const productsUrl = 'https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=1';
+  const productsResponse = await fetch(productsUrl, {
+    method: 'GET',
+    headers: await createUnleashedHeaders(productsUrl, authData.apiKey, authData.apiId)
+  });
+  const productsData = await productsResponse.json();
+  results.products = productsData.Items || [];
+
+  // Customers
+  const customersUrl = 'https://api.unleashedsoftware.com/Customers?pageSize=200&pageNumber=1';
+  const customersResponse = await fetch(customersUrl, {
+    method: 'GET',
+    headers: await createUnleashedHeaders(customersUrl, authData.apiKey, authData.apiId)
+  });
+  const customersData = await customersResponse.json();
+  results.customers = customersData.Items || [];
+
+  // Warehouses
+  const warehousesUrl = 'https://api.unleashedsoftware.com/Warehouses';
+  const warehousesResponse = await fetch(warehousesUrl, {
+    method: 'GET',
+    headers: await createUnleashedHeaders(warehousesUrl, authData.apiKey, authData.apiId)
+  });
+  const warehousesData = await warehousesResponse.json();
+  results.warehouses = warehousesData.Items || [];
+
+  return results;
+}
+
+// Fetch Shopify data
+async function fetchShopifyProducts(baseUrl, headers) {
+  const allProducts = [];
+  let hasNextPage = true;
+  let cursor = null;
+  const query = `
+    query GetProducts($first: Int!, $after: String) {
+      products(first: $first, after: $after) {
+        edges {
+          node {
+            id
+            title
+            tracksInventory
+            totalInventory
+            featuredImage {
+              id
+              url
+              altText
+              width
+              height
+            }
+            variants(first: 20) {
+              edges {
+                node {
+                  inventoryItem {
+                    tracked
+                    inventoryLevels(first: 5) {
+                      nodes {
+                        quantities(names: "available") {
+                          quantity
+                        }
+                        location {
+                          name
+                        }
+                      }
+                    }
+                    sku
+                  }
+                  displayName
+                  id
+                  image {
+                    id
+                    url
+                    altText
+                    width
+                    height
+                  }
+                  price
+                  metafields(first: 3, keys: ["custom.price_tier_1", "custom.price_tier_2", "custom.price_tier_3"]) {
+                    edges {
+                      node {
+                        key
+                        value
+                      }
+                    }
+                  }
+                  title
+                  sku
+                }
+              }
+            }
+            description
+            productType
+            status
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `;
+  while (hasNextPage) {
+    const variables = { first: 25, after: cursor };
+    const response = await fetch(`${baseUrl}/graphql.json`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables })
+    });
+    const data = await response.json();
+    if (data.errors) throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
+    const products = data.data.products.edges.map(edge => edge.node);
+    allProducts.push(...products);
+    hasNextPage = data.data.products.pageInfo.hasNextPage;
+    cursor = data.data.products.pageInfo.endCursor;
+  }
+  return allProducts;
+}
+
+async function fetchShopifyCustomers(baseUrl, headers) {
+  const allCustomers = [];
+  let hasNextPage = true;
+  let cursor = null;
+  const query = `
+    query GetCustomers($first: Int!, $after: String) {
+      customers(first: $first, after: $after) {
+        edges {
+          node {
+            id
+            firstName
+            lastName
+            email
+            phone
+            metafields(
+              keys: ["unleashed.unleashed_customer_code", "unleashed.unleashed_customer_name", "unleashed.unleashed_sell_price_tier"]
+              first: 10
+            ) {
+              edges {
+                node {
+                  id
+                  key
+                  value
+                  namespace
+                }
+              }
+            }
+          }
+          cursor
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `;
+  while (hasNextPage) {
+    const variables = { first: 25, after: cursor };
+    const response = await fetch(`${baseUrl}/graphql.json`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables })
+    });
+    const data = await response.json();
+    if (data.errors) throw new Error(`Shopify Customers GraphQL errors: ${JSON.stringify(data.errors)}`);
+    const customers = data.data.customers.edges.map(edge => edge.node);
+    allCustomers.push(...customers);
+    hasNextPage = data.data.customers.pageInfo.hasNextPage;
+    cursor = data.data.customers.pageInfo.endCursor;
+  }
+  return allCustomers;
+}
+
+async function fetchShopifyLocations(baseUrl, headers) {
+  const response = await fetch(`${baseUrl}/locations.json`, { headers });
+  const data = await response.json();
+  return data.locations;
+}
+
+async function fetchShopifyData(auth) {
+  const { accessToken, shopDomain } = auth;
+  const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': accessToken
+  };
+  const [products, customers, locations] = await Promise.all([
+    fetchShopifyProducts(baseUrl, headers),
+    fetchShopifyCustomers(baseUrl, headers),
+    fetchShopifyLocations(baseUrl, headers)
+  ]);
+  return { products, customers, locations };
+}
+
+// Main exported function
+async function pullAllData(domain, env) {
+  if (!env.AUTH_STORE) {
+    throw new Error('KV binding AUTH_STORE not found');
+  }
+
+  // Get authentication data from KV store
+  const authData = await getAuthData(env.AUTH_STORE, domain);
+  
+  if (!authData || !authData.unleashed || !authData.shopify) {
+    throw new Error('Invalid authentication data structure');
+  }
+
+  // Fetch data from both systems
+  const [unleashedData, shopifyData] = await Promise.all([
+    fetchUnleashedData(authData.unleashed),
+    fetchShopifyData(authData.shopify)
+  ]);
+
+  return {
+    unleashed: unleashedData,
+    shopify: shopifyData
+  };
+}
+
+export { pullAllData }; 

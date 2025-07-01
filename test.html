@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unleashed-Shopify Sync Test</title>
+    <script src="client-script.js"></script>
+</head>
+<body>
+    <h1>Unleashed-Shopify Sync Test</h1>
+    <p>Open the browser console (F12) to see the mapping results.</p>
+    <button onclick="testMappingResults()">Test Mapping Results</button>
+
+    <script>
+        function testMappingResults() {
+            // Sample test data
+            const testResults = {
+                customers: {
+                    toCreate: [{
+                        firstName: 'John',
+                        lastName: 'Doe',
+                        email: 'john@example.com',
+                        phone: '123-456-7890',
+                        metafields: [{
+                            key: 'unleashed_customer_code',
+                            value: 'CUST001'
+                        }]
+                    }],
+                    toUpdate: [{
+                        id: '1234',
+                        firstName: 'Jane',
+                        lastName: 'Smith',
+                        email: 'jane@example.com',
+                        phone: '098-765-4321',
+                        metafields: [{
+                            key: 'unleashed_customer_code',
+                            value: 'CUST002'
+                        }]
+                    }],
+                    errors: [{
+                        customerCode: 'CUST003',
+                        error: 'Invalid email format'
+                    }]
+                },
+                locations: {
+                    toCreate: [{
+                        name: 'WH1 - Main Warehouse',
+                        address1: '123 Main St',
+                        city: 'Sydney',
+                        country: 'AU',
+                        phone: '111-222-3333'
+                    }],
+                    toUpdate: [{
+                        id: '5678',
+                        name: 'WH2 - Secondary Warehouse',
+                        address1: '456 Side St',
+                        city: 'Melbourne',
+                        country: 'AU',
+                        phone: '444-555-6666'
+                    }],
+                    errors: []
+                },
+                products: {
+                    toCreate: [{
+                        title: 'New Chair Set',
+                        handle: 'new-chair-set',
+                        variants: [{
+                            sku: 'CHAIR-001',
+                            title: 'Blue / Large',
+                            price: 199.99
+                        }, {
+                            sku: 'CHAIR-002',
+                            title: 'Red / Small',
+                            price: 149.99
+                        }]
+                    }],
+                    toUpdate: [{
+                        id: '9012',
+                        title: 'Existing Table',
+                        handle: 'existing-table',
+                        variants: [{
+                            sku: 'TABLE-001',
+                            title: 'Default Title',
+                            price: 299.99
+                        }]
+                    }],
+                    toArchive: [{
+                        id: '3456',
+                        title: 'Discontinued Product',
+                        handle: 'discontinued-product',
+                        status: 'ARCHIVED'
+                    }],
+                    errors: [{
+                        productCode: 'INVALID-001',
+                        error: 'Missing required field: price'
+                    }]
+                }
+            };
+
+            // Log the test results
+            logMappingResults(testResults);
+        }
+    </script>
+</body>
+</html> 

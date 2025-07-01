@@ -3,14 +3,135 @@
 <head>
     <title>Unleashed-Shopify Sync Test</title>
     <script src="client-script.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .button-group {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        
+        button {
+            background-color: #007cba;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 10px 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #005a87;
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .description {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        
+        .warning {
+            color: #d63638;
+            background-color: #fef7f1;
+            border: 1px solid #d63638;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .info {
+            color: #0073aa;
+            background-color: #f0f6fc;
+            border: 1px solid #0073aa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .recommended {
+            background-color: #4CAF50 !important;
+            position: relative;
+        }
+
+        .recommended::before {
+            content: "⭐ RECOMMENDED";
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #FF9800;
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
-    <h1>Unleashed-Shopify Sync Test</h1>
-    <p>Open the browser console (F12) to see the mapping results.</p>
-    <button onclick="testMappingResults()">Test Mapping Results</button>
+    <h1>🔄 Unleashed-Shopify Sync Test</h1>
+    
+    <div class="info">
+        <strong>Instructions:</strong> Open the browser console (F12) to see detailed logs and results from all operations.
+    </div>
+
+    <div class="button-group">
+        <h2>📊 Data Mapping & Sync</h2>
+        <div class="description">
+            Test data fetching and mapping from Unleashed to Shopify. This shows what changes would be made without actually modifying any data.
+        </div>
+        <button kilr-unleashed-sync>🔍 Fetch & Map Data</button>
+        <button onclick="testMappingResults()">🧪 Test Sample Mapping Results</button>
+    </div>
+
+    <div class="button-group">
+        <h2>🏭 Location Operations</h2>
+        <div class="description">
+            Manage Shopify locations based on Unleashed warehouse data. Choose between individual steps or the complete workflow.
+        </div>
+        
+        <div class="info">
+            <strong>✨ New Complete Workflow:</strong> The sync button below will automatically map and then execute mutations in one seamless operation.
+        </div>
+        
+        <button kilr-unleashed-sync-locations class="recommended">🚀 Complete Location Sync</button>
+        
+        <div class="warning">
+            <strong>Advanced Options:</strong> Use these for specific testing or troubleshooting only.
+        </div>
+        
+        <button kilr-unleashed-mutate-locations>🏗️ Mutations Only</button>
+    </div>
+
+    <div class="button-group">
+        <h2>📋 Test Functions</h2>
+        <div class="description">
+            Test various client-side functionality and logging.
+        </div>
+        <button onclick="testConfiguration()">⚙️ Test Configuration</button>
+        <button onclick="clearConsole()">🧹 Clear Console</button>
+    </div>
 
     <script>
         function testMappingResults() {
+            console.log('🧪 Testing sample mapping results...');
+            
             // Sample test data
             const testResults = {
                 customers: {
@@ -97,7 +218,50 @@
 
             // Log the test results
             logMappingResults(testResults);
+            console.log('✅ Sample mapping results test completed');
         }
+
+        function testConfiguration() {
+            console.log('⚙️ Testing configuration...');
+            
+            if (typeof window.configureUnleashedSync === 'function') {
+                console.log('✅ Configuration function is available');
+                
+                // Test configuration
+                window.configureUnleashedSync({
+                    testMode: true
+                });
+                
+                console.log('✅ Configuration test completed');
+            } else {
+                console.error('❌ Configuration function not found');
+            }
+        }
+
+        function clearConsole() {
+            console.clear();
+            console.log('🧹 Console cleared');
+            console.log('🔄 Unleashed-Shopify Sync Test Environment Ready');
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', function() {
+            console.log('🔄 Unleashed-Shopify Sync Test Environment Loaded');
+            console.log('📍 Current domain:', window.location.hostname);
+            console.log('🔗 Worker URL:', 'https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev');
+            console.log('');
+            console.log('Available test functions:');
+            console.log('- testMappingResults(): Test sample data mapping');
+            console.log('- testConfiguration(): Test configuration function');
+            console.log('- clearConsole(): Clear the console');
+            console.log('');
+            console.log('Available endpoints:');
+            console.log('- 🔍 Fetch & Map Data: Pull real data and show mapping results only');
+            console.log('- 🚀 Complete Location Sync: Map + Execute mutations (RECOMMENDED)');
+            console.log('- 🏗️ Mutations Only: Execute mutations without re-mapping');
+            console.log('');
+            console.log('💡 TIP: Use "Complete Location Sync" for the full automated workflow!');
+        });
     </script>
 </body>
 </html> 

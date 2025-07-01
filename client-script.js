@@ -2,7 +2,11 @@
     // Configuration object
     const config = {
         workerUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/data-fetch",
+        mutationUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/mutate-locations",
+        syncUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/sync-locations",
         buttonAttribute: "kilr-unleashed-sync",
+        mutateButtonAttribute: "kilr-unleashed-mutate-locations",
+        syncButtonAttribute: "kilr-unleashed-sync-locations",
         loadingClass: "kilr-sync-loading",
         successClass: "kilr-sync-success",
         errorClass: "kilr-sync-error"
@@ -95,11 +99,11 @@
                     button.setAttribute("data-original-text", button.textContent);
                 }
                 button.classList.add(config.loadingClass);
-                button.textContent = "Syncing...";
+                button.textContent = "Processing...";
                 break;
             case "success":
                 button.classList.add(config.successClass);
-                button.textContent = "Sync Complete";
+                button.textContent = "Complete";
                 setTimeout(() => {
                     button.classList.remove(config.successClass);
                     button.textContent = originalText;
@@ -107,7 +111,7 @@
                 break;
             case "error":
                 button.classList.add(config.errorClass);
-                button.textContent = "Sync Failed";
+                button.textContent = "Failed";
                 setTimeout(() => {
                     button.classList.remove(config.errorClass);
                     button.textContent = originalText;
@@ -116,7 +120,7 @@
         }
     }
 
-    // Handle sync
+    // Handle sync (data mapping only)
     function handleSync(event) {
         event.preventDefault();
         const button = event.currentTarget;
@@ -197,21 +201,217 @@
         });
     }
 
+    // Handle location mutations
+    function handleLocationMutations(event) {
+        event.preventDefault();
+        const button = event.currentTarget;
+        console.log('Handle location mutations called for button:', button);
+        
+        if (button.classList.contains(config.loadingClass)) {
+            console.log('Button is already in loading state, ignoring click');
+            return;
+        }
+
+        // Get the current domain
+        const domain = window.location.hostname;
+        console.log('Current domain:', domain);
+
+        // Prepare the request data
+        const requestData = { domain };
+        console.log('Mutation request data:', requestData);
+
+        // Update button state
+        updateButtonState(button, "loading");
+        button.textContent = "Mutating Locations...";
+
+        // Make the request
+        fetch(config.mutationUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(requestData)
+        })
+        .then(response => {
+            console.log('Mutation response received:', response);
+            return response.json().then(data => {
+                if (!response.ok) {
+                    throw new Error(data.error || 'Location mutation failed');
+                }
+                return data;
+            });
+        })
+        .then(data => {
+            console.log('Mutation data received:', data);
+            if (data.success) {
+                const summary = data.mutationResults.summary;
+                const message = `Location mutations completed! ${summary.createdCount} created, ${summary.updatedCount} updated. Total: ${summary.totalSuccessful} successful, ${summary.totalFailed} failed. Duration: ${summary.duration}`;
+                
+                showNotification(message, "success");
+                updateButtonState(button, "success");
+
+                // Log detailed mutation results
+                logMutationResults(data);
+            } else {
+                throw new Error(data.error || 'Location mutation failed');
+            }
+        })
+        .catch(error => {
+            console.error('Location mutation error:', error);
+            showNotification(error.message || "Failed to mutate locations", "error");
+            updateButtonState(button, "error");
+        });
+    }
+
+    // Handle complete location sync (map + mutate)
+    function handleLocationSync(event) {
+        event.preventDefault();
+        const button = event.currentTarget;
+        console.log('Handle location sync called for button:', button);
+        
+        if (button.classList.contains(config.loadingClass)) {
+            console.log('Button is already in loading state, ignoring click');
+            return;
+        }
+
+        // Get the current domain
+        const domain = window.location.hostname;
+        console.log('Current domain:', domain);
+
+        // Prepare the request data
+        const requestData = { domain };
+        console.log('Sync request data:', requestData);
+
+        // Update button state
+        updateButtonState(button, "loading");
+        button.textContent = "Syncing Locations...";
+
+        // Make the request
+        fetch(config.syncUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(requestData)
+        })
+        .then(response => {
+            console.log('Sync response received:', response);
+            return response.json().then(data => {
+                if (!response.ok) {
+                    throw new Error(data.error || 'Location sync failed');
+                }
+                return data;
+            });
+        })
+        .then(data => {
+            console.log('Sync data received:', data);
+            if (data.success) {
+                const summary = data.mutationResults.summary;
+                const mappingResults = data.mappingResults;
+                
+                let message = `Location sync completed! `;
+                message += `Mapped: ${mappingResults.toCreate} to create, ${mappingResults.toUpdate} to update. `;
+                message += `Executed: ${summary.createdCount} created, ${summary.updatedCount} updated. `;
+                message += `Duration: ${summary.duration}`;
+                
+                showNotification(message, "success");
+                updateButtonState(button, "success");
+
+                // Log detailed sync results
+                logSyncResults(data);
+            } else {
+                throw new Error(data.error || 'Location sync failed');
+            }
+        })
+        .catch(error => {
+            console.error('Location sync error:', error);
+            showNotification(error.message || "Failed to sync locations", "error");
+            updateButtonState(button, "error");
+        });
+    }
+
+    // Log mutation results
+    function logMutationResults(data) {
+        console.log('🎯 === LOCATION MUTATION RESULTS ===');
+        console.log('Mapping Summary:', data.mappingResults);
+        console.log('Mutation Summary:', data.mutationResults.summary);
+        
+        if (data.mutationResults.created.successful > 0) {
+            console.log('✅ Successfully created locations:', data.mutationResults.created.successful);
+        }
+        
+        if (data.mutationResults.updated.successful > 0) {
+            console.log('🔄 Successfully updated locations:', data.mutationResults.updated.successful);
+        }
+        
+        if (data.mutationResults.created.failed > 0 || data.mutationResults.updated.failed > 0) {
+            console.log('❌ Failed operations:', {
+                createdFailed: data.mutationResults.created.failed,
+                updatedFailed: data.mutationResults.updated.failed
+            });
+        }
+        
+        console.log('🎯 === END MUTATION RESULTS ===');
+    }
+
+    // Log complete sync results
+    function logSyncResults(data) {
+        console.log('🔄 === LOCATION SYNC RESULTS ===');
+        console.log('Workflow:', data.workflow);
+        console.log('Mapping Summary:', data.mappingResults);
+        console.log('Mutation Summary:', data.mutationResults.summary);
+        
+        if (data.mappingResults.details) {
+            console.log('📊 Mapping Details:', data.mappingResults.details);
+        }
+        
+        if (data.mutationResults.summary.totalSuccessful > 0) {
+            console.log('✅ Total successful operations:', data.mutationResults.summary.totalSuccessful);
+            console.log(`   Created: ${data.mutationResults.summary.createdCount}`);
+            console.log(`   Updated: ${data.mutationResults.summary.updatedCount}`);
+        }
+        
+        if (data.mutationResults.summary.totalFailed > 0) {
+            console.log('❌ Total failed operations:', data.mutationResults.summary.totalFailed);
+        }
+        
+        console.log('🔄 === END SYNC RESULTS ===');
+    }
+
     // Initialize buttons
     function initializeButtons() {
-        console.log('Initializing sync buttons');
-        const buttons = t.querySelectorAll(`[${config.buttonAttribute}="button"]`);
-        console.log('Found buttons:', buttons.length);
+        console.log('Initializing unleashed sync buttons...');
         
-        buttons.forEach(button => {
-            if (!button.hasAttribute("data-kilr-initialized")) {
-                console.log('Initializing button:', button);
-                button.setAttribute("data-kilr-initialized", "true");
-                // Remove any existing click handlers
-                button.removeEventListener("click", handleSync);
-                // Add the click handler
-                button.addEventListener("click", handleSync);
-            }
+        // Initialize sync buttons
+        const syncButtons = t.querySelectorAll(`[${config.buttonAttribute}]`);
+        console.log('Found sync buttons:', syncButtons.length);
+        
+        syncButtons.forEach(button => {
+            console.log('Setting up sync button:', button);
+            button.removeEventListener("click", handleSync);
+            button.addEventListener("click", handleSync);
+        });
+
+        // Initialize mutation buttons  
+        const mutationButtons = t.querySelectorAll(`[${config.mutateButtonAttribute}]`);
+        console.log('Found mutation buttons:', mutationButtons.length);
+        
+        mutationButtons.forEach(button => {
+            console.log('Setting up mutation button:', button);
+            button.removeEventListener("click", handleLocationMutations);
+            button.addEventListener("click", handleLocationMutations);
+        });
+
+        // Initialize complete sync buttons  
+        const completeButtons = t.querySelectorAll(`[${config.syncButtonAttribute}]`);
+        console.log('Found complete sync buttons:', completeButtons.length);
+        
+        completeButtons.forEach(button => {
+            console.log('Setting up complete sync button:', button);
+            button.removeEventListener("click", handleLocationSync);
+            button.addEventListener("click", handleLocationSync);
         });
     }
 
@@ -230,10 +430,16 @@
                 mutation.addedNodes.forEach((node) => {
                     if (node.nodeType === 1) { // Element node
                         // Check if the added node is a button or contains buttons
-                        if (node.matches && node.matches(`[${config.buttonAttribute}="button"]`)) {
+                        if (node.matches && (
+                            node.matches(`[${config.buttonAttribute}]`) || 
+                            node.matches(`[${config.mutateButtonAttribute}]`) ||
+                            node.matches(`[${config.syncButtonAttribute}]`)
+                        )) {
                             shouldReinitialize = true;
                         } else if (node.querySelector) {
-                            const hasButtons = node.querySelector(`[${config.buttonAttribute}="button"]`);
+                            const hasButtons = node.querySelector(`[${config.buttonAttribute}]`) || 
+                                             node.querySelector(`[${config.mutateButtonAttribute}]`) ||
+                                             node.querySelector(`[${config.syncButtonAttribute}]`);
                             if (hasButtons) {
                                 shouldReinitialize = true;
                             }
@@ -397,23 +603,17 @@
         
         if (safeResults.products.toCreate?.length) {
             console.group('%cProducts to Create:', styles.create);
-            safeResults.products.toCreate.forEach(product => {
-                console.group(`%c${product.title}`, styles.create);
-                console.table([formatProductForLog(product)]);
-                console.table(product.variants);
-                console.groupEnd();
-            });
+            safeResults.products.toCreate.forEach(product => 
+                console.table([formatProductForLog(product)])
+            );
             console.groupEnd();
         }
 
         if (safeResults.products.toUpdate?.length) {
             console.group('%cProducts to Update:', styles.update);
-            safeResults.products.toUpdate.forEach(product => {
-                console.group(`%c${product.title}`, styles.update);
-                console.table([formatProductForLog(product)]);
-                console.table(product.variants);
-                console.groupEnd();
-            });
+            safeResults.products.toUpdate.forEach(product => 
+                console.table([formatProductForLog(product)])
+            );
             console.groupEnd();
         }
 
@@ -431,28 +631,6 @@
             console.groupEnd();
         }
 
-        console.groupEnd();
-
-        // Log summary
-        console.group('%cSummary', styles.header);
-        console.table({
-            customers: {
-                toCreate: safeResults.customers?.toCreate?.length || 0,
-                toUpdate: safeResults.customers?.toUpdate?.length || 0,
-                errors: safeResults.customers?.errors?.length || 0
-            },
-            locations: {
-                toCreate: safeResults.locations?.toCreate?.length || 0,
-                toUpdate: safeResults.locations?.toUpdate?.length || 0,
-                errors: safeResults.locations?.errors?.length || 0
-            },
-            products: {
-                toCreate: safeResults.products?.toCreate?.length || 0,
-                toUpdate: safeResults.products?.toUpdate?.length || 0,
-                toArchive: safeResults.products?.toArchive?.length || 0,
-                errors: safeResults.products?.errors?.length || 0
-            }
-        });
         console.groupEnd();
     }
 

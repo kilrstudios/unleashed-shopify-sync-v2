@@ -7,6 +7,7 @@ import { pullAllData } from './data_pull.js';
 import { mapCustomers } from './customer-mapping.js';
 import { mapLocations } from './location-mapping.js';
 import { mapProducts } from './product-mapping.js';
+import { handleLocationMutations, handleLocationSync } from './location-mutation-handler.js';
 
 // CORS headers for all responses
 const corsHeaders = {
@@ -25,6 +26,24 @@ function jsonResponse(data, status = 200) {
       'Content-Type': 'application/json',
     },
   });
+}
+
+// Helper function to get auth data from KV store
+async function getAuthData(env, domain) {
+  if (!env.AUTH_STORE) {
+    throw new Error('KV binding AUTH_STORE not found');
+  }
+  
+  try {
+    const authString = await env.AUTH_STORE.get(domain);
+    if (!authString) {
+      throw new Error(`No authentication data found for domain: ${domain}`);
+    }
+    return JSON.parse(authString);
+  } catch (error) {
+    console.error('Error getting auth data:', error);
+    throw new Error(`Failed to get authentication data: ${error.message}`);
+  }
 }
 
 async function handleDataFetch(request, env) {
@@ -162,6 +181,14 @@ export default {
     // Route requests
     if (url.pathname === '/api/v2/data-fetch' && request.method === 'POST') {
       return handleDataFetch(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/mutate-locations' && request.method === 'POST') {
+      return handleLocationMutations(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/sync-locations' && request.method === 'POST') {
+      return handleLocationSync(request, env);
     }
 
     return new Response('Not Found', { status: 404 });

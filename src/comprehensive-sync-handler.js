@@ -120,12 +120,13 @@ export async function handleComprehensiveSync(request, env) {
       results.steps.dataFetch = {
         success: true,
         duration: `${((Date.now() - stepStart) / 1000).toFixed(2)}s`,
-        data: {
-          unleashed: {
-            warehouses: data.unleashed.warehouses.length,
-            customers: data.unleashed.customers.length,
-            products: data.unleashed.products.length
-          },
+                  data: {
+            unleashed: {
+              warehouses: data.unleashed.warehouses.length,
+              customers: data.unleashed.customers.length,
+              contacts: data.unleashed.contacts.length,
+              products: data.unleashed.products.length
+            },
           shopify: {
             locations: data.shopify.locations.length,
             customers: data.shopify.customers.length,
@@ -195,7 +196,7 @@ export async function handleComprehensiveSync(request, env) {
       try {
         // Map customers
         console.log('🗺️ Step 3a: Mapping customers...');
-        const customerMappingResults = await mapCustomers(data.unleashed.customers, data.shopify.customers);
+        const customerMappingResults = await mapCustomers(data.unleashed.contacts, data.unleashed.customers, data.shopify.customers);
         
         // Execute customer mutations
         console.log('🔄 Step 3b: Executing customer mutations...');
@@ -342,7 +343,7 @@ export async function handleOptimizedSync(request, env) {
     console.log('🗺️ Step 2: Running mapping operations in parallel...');
     const [locationMappingResults, customerMappingResults] = await Promise.all([
       mapLocations(data.unleashed.warehouses, data.shopify.locations),
-      mapCustomers(data.unleashed.customers, data.shopify.customers)
+      mapCustomers(data.unleashed.contacts, data.unleashed.customers, data.shopify.customers)
     ]);
     
     console.log('✅ Mapping completed. Starting sequential mutations...');

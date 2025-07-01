@@ -6,10 +6,39 @@
 const MAX_BATCH_SIZE = 10; // GraphQL batch limit for customer operations
 const MUTATION_DELAY = 100; // Small delay between batches to avoid rate limits
 
-// GraphQL mutation for creating/updating a customer using customerSet
-const CUSTOMER_SET_MUTATION = `
-  mutation customerSet($identifier: CustomerSetIdentifierInput, $input: CustomerInput!) {
-    customerSet(identifier: $identifier, input: $input) {
+// GraphQL mutation for creating customers using standard customerCreate
+const CUSTOMER_CREATE_MUTATION = `
+  mutation customerCreate($input: CustomerInput!) {
+    customerCreate(input: $input) {
+      customer {
+        id
+        firstName
+        lastName
+        email
+        phone
+        metafields(first: 10) {
+          edges {
+            node {
+              namespace
+              key
+              value
+              type
+            }
+          }
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+// GraphQL mutation for updating customers using customerUpdate
+const CUSTOMER_UPDATE_MUTATION = `
+  mutation customerUpdate($input: CustomerInput!) {
+    customerUpdate(input: $input) {
       customer {
         id
         firstName
@@ -40,13 +69,19 @@ const CUSTOMER_SET_MUTATION = `
  */
 async function executeMutation(baseUrl, headers, mutation, variables) {
   try {
-    const response = await fetch(`${baseUrl}/graphql.json`, {
+    const url = `${baseUrl}/graphql.json`;
+    const body = JSON.stringify({
+      query: mutation,
+      variables
+    });
+    
+    console.log(`Making GraphQL request to: ${url}`);
+    console.log(`Request body:`, body);
+    
+    const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        query: mutation,
-        variables
-      })
+      body
     });
 
     if (!response.ok) {
@@ -55,7 +90,10 @@ async function executeMutation(baseUrl, headers, mutation, variables) {
 
     const result = await response.json();
     
+    console.log(`GraphQL Response:`, JSON.stringify(result, null, 2));
+    
     if (result.errors) {
+      console.error(`GraphQL errors:`, result.errors);
       throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
     }
 
@@ -87,6 +125,7 @@ async function createCustomersBatch(baseUrl, headers, customersToCreate) {
     for (const customerData of batch) {
       try {
         console.log(`🏗️ Creating customer: "${customerData.firstName} ${customerData.lastName}" (${customerData.email})`);
+        console.log(`   CUSTOMER DATA TO CREATE:`, JSON.stringify(customerData, null, 2));
 
         // Prepare the customer input for Shopify using customerSet
         const customerInput = {
@@ -102,30 +141,22 @@ async function createCustomersBatch(baseUrl, headers, customersToCreate) {
           }))
         };
 
-        // Use email as identifier for customerSet (will create if doesn't exist)
-        const identifier = {
-          email: customerData.email
-        };
-
         const mutationResult = await executeMutation(
           baseUrl,
           headers,
-          CUSTOMER_SET_MUTATION,
-          { 
-            identifier,
-            input: customerInput 
-          }
+          CUSTOMER_CREATE_MUTATION,
+          { input: customerInput }
         );
 
-        if (mutationResult.customerSet.userErrors.length > 0) {
-          const errors = mutationResult.customerSet.userErrors;
+        if (mutationResult.customerCreate.userErrors.length > 0) {
+          const errors = mutationResult.customerCreate.userErrors;
           console.error(`❌ Failed to create customer "${customerData.firstName} ${customerData.lastName}":`, errors);
           results.failed.push({
             customerData,
             errors: errors.map(e => `${e.field}: ${e.message}`)
           });
         } else {
-          const createdCustomer = mutationResult.customerSet.customer;
+          const createdCustomer = mutationResult.customerCreate.customer;
           console.log(`✅ Successfully created customer: "${createdCustomer.firstName} ${createdCustomer.lastName}" (ID: ${createdCustomer.id})`);
           results.successful.push({
             originalData: customerData,
@@ -136,9 +167,11 @@ async function createCustomersBatch(baseUrl, headers, customersToCreate) {
         results.totalProcessed++;
       } catch (error) {
         console.error(`❌ Error creating customer "${customerData.firstName} ${customerData.lastName}":`, error.message);
+        console.error(`   Full error:`, error);
         results.failed.push({
           customerData,
-          errors: [error.message]
+          errors: [error.message],
+          fullError: error.toString()
         });
         results.totalProcessed++;
       }
@@ -176,8 +209,9 @@ async function updateCustomersBatch(baseUrl, headers, customersToUpdate) {
       try {
         console.log(`🔄 Updating customer: "${customerData.firstName} ${customerData.lastName}" (${customerData.email})`);
 
-        // Prepare the customer input for Shopify using customerSet
+        // Prepare the customer input for Shopify using customerUpdate (need ID for updates)
         const customerInput = {
+          id: customerData.id, // Required for updates
           firstName: customerData.firstName,
           lastName: customerData.lastName,
           email: customerData.email,
@@ -190,30 +224,22 @@ async function updateCustomersBatch(baseUrl, headers, customersToUpdate) {
           }))
         };
 
-        // Use email as identifier for customerSet (will update if exists)
-        const identifier = {
-          email: customerData.email
-        };
-
         const mutationResult = await executeMutation(
           baseUrl,
           headers,
-          CUSTOMER_SET_MUTATION,
-          { 
-            identifier,
-            input: customerInput 
-          }
+          CUSTOMER_UPDATE_MUTATION,
+          { input: customerInput }
         );
 
-        if (mutationResult.customerSet.userErrors.length > 0) {
-          const errors = mutationResult.customerSet.userErrors;
+        if (mutationResult.customerUpdate.userErrors.length > 0) {
+          const errors = mutationResult.customerUpdate.userErrors;
           console.error(`❌ Failed to update customer "${customerData.firstName} ${customerData.lastName}":`, errors);
           results.failed.push({
             customerData,
             errors: errors.map(e => `${e.field}: ${e.message}`)
           });
         } else {
-          const updatedCustomer = mutationResult.customerSet.customer;
+          const updatedCustomer = mutationResult.customerUpdate.customer;
           console.log(`✅ Successfully updated customer: "${updatedCustomer.firstName} ${updatedCustomer.lastName}" (ID: ${updatedCustomer.id})`);
           results.successful.push({
             originalData: customerData,
@@ -250,8 +276,8 @@ async function mutateCustomers(authData, mappingResults) {
     console.log('🔄 Starting customer mutations...');
     console.log(`📊 Mutation summary: ${mappingResults.toCreate.length} to create, ${mappingResults.toUpdate.length} to update`);
 
-    // Prepare the base URL and headers
-    const baseUrl = `https://${authData.domain}.myshopify.com/admin/api/2023-10`;
+    // Prepare the base URL and headers (using same pattern as working location mutations)
+    const baseUrl = `https://${authData.shopDomain}/admin/api/2025-04`;
     const headers = {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': authData.accessToken
@@ -294,6 +320,12 @@ async function mutateCustomers(authData, mappingResults) {
     console.log(`   Updated: ${results.summary.totalUpdated}`);
     console.log(`   Failed: ${results.summary.totalFailed}`);
     console.log(`   Total Processed: ${results.summary.totalProcessed}`);
+
+    // Add detailed error info to results for debugging
+    if (results.created.failed.length > 0) {
+      console.log(`🚨 Creation failures:`, JSON.stringify(results.created.failed, null, 2));
+      results.debugErrors = results.created.failed;
+    }
 
     return results;
   } catch (error) {

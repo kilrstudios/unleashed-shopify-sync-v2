@@ -1,8 +1,8 @@
 import { slugify, validateEmail } from './helpers.js';
 
-async function mapCustomers(unleashedCustomers, shopifyCustomers) {
+async function mapCustomers(unleashedContacts, unleashedCustomers, shopifyCustomers) {
   console.log('👥 === STARTING CUSTOMER MAPPING ===');
-  console.log(`📊 Input data: ${unleashedCustomers.length} Unleashed customers, ${shopifyCustomers.length} Shopify customers`);
+  console.log(`📊 Input data: ${unleashedContacts.length} Unleashed contacts, ${unleashedCustomers.length} Unleashed customers, ${shopifyCustomers.length} Shopify customers`);
 
   const results = {
     toCreate: [],
@@ -14,31 +14,43 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
   // Log all existing Shopify customers for reference
   console.log('👥 Existing Shopify customers:');
   shopifyCustomers.forEach((customer, index) => {
-    const customerCode = customer.metafields?.['unleashed.unleashed_customer_code'];
+    const customerCode = customer.metafields?.['unleashed.customer_code'];
     console.log(`   ${index + 1}. "${customer.firstName} ${customer.lastName}" (${customer.email}) (ID: ${customer.id}) - Customer Code: ${customerCode || 'None'}`);
   });
 
+  // Create a lookup map for Unleashed customers by their ID/code for efficient lookup
+  const customerLookup = new Map();
+  unleashedCustomers.forEach(customer => {
+    customerLookup.set(customer.Guid, customer);
+    customerLookup.set(customer.CustomerCode, customer);
+  });
+
   try {
-    console.log('\n🔄 Processing Unleashed customers...');
+    console.log('\n🔄 Processing Unleashed contacts...');
     
-    for (const unleashedCustomer of unleashedCustomers) {
+    for (const unleashedContact of unleashedContacts) {
       try {
-        console.log(`\n👤 Processing customer: ${unleashedCustomer.CustomerCode}`);
-        console.log(`   Original data:`, {
-          CustomerCode: unleashedCustomer.CustomerCode,
-          CustomerName: unleashedCustomer.CustomerName,
-          Email: unleashedCustomer.Email,
-          ContactFirstName: unleashedCustomer.ContactFirstName,
-          ContactLastName: unleashedCustomer.ContactLastName,
-          PhoneNumber: unleashedCustomer.PhoneNumber,
-          MobileNumber: unleashedCustomer.MobileNumber,
-          SellPriceTier: unleashedCustomer.SellPriceTier
+        console.log(`\n👤 Processing contact: ${unleashedContact.Guid}`);
+        console.log(`   RAW CONTACT DATA:`, JSON.stringify(unleashedContact, null, 2));
+        console.log(`   Original contact data:`, {
+          Guid: unleashedContact.Guid,
+          FirstName: unleashedContact.FirstName,
+          LastName: unleashedContact.LastName,
+          EmailAddress: unleashedContact.EmailAddress,
+          OfficePhone: unleashedContact.OfficePhone,
+          MobilePhone: unleashedContact.MobilePhone,
+          CustomerGuid: unleashedContact.CustomerGuid,
+          CustomerCode: unleashedContact.CustomerCode,
+          CustomerName: unleashedContact.CustomerName
         });
 
-        // Extract primary matching fields
-        const email = unleashedCustomer.Email || `${unleashedCustomer.CustomerCode}@placeholder.com`;
-        const firstName = unleashedCustomer.ContactFirstName || unleashedCustomer.CustomerName.split(' ')[0];
-        const lastName = unleashedCustomer.ContactLastName || unleashedCustomer.CustomerName.split(' ').slice(1).join(' ');
+        // The associated customer data is already attached to the contact
+        console.log(`   🏢 Associated customer: "${unleashedContact.CustomerName}" (${unleashedContact.CustomerCode})`);
+
+        // Extract primary matching fields from contact
+        const email = unleashedContact.EmailAddress || `contact-${unleashedContact.Guid}@placeholder.com`;
+        const firstName = unleashedContact.FirstName || 'Unknown';
+        const lastName = unleashedContact.LastName || 'Contact';
 
         console.log(`   📧 Generated email: "${email}"`);
         console.log(`   👤 Generated name: "${firstName} ${lastName}"`);
@@ -48,44 +60,63 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
         const matchingCustomer = shopifyCustomers.find(sc => 
           sc.email.toLowerCase() === email.toLowerCase() ||
           (sc.firstName + ' ' + sc.lastName).toLowerCase() === (firstName + ' ' + lastName).toLowerCase() ||
-          sc.metafields?.['unleashed.unleashed_customer_code'] === unleashedCustomer.CustomerCode
+          sc.metafields?.['unleashed.contact_guid'] === unleashedContact.Guid
         );
 
         if (matchingCustomer) {
           console.log(`   ✅ Match found! Existing customer: "${matchingCustomer.firstName} ${matchingCustomer.lastName}" (${matchingCustomer.email}) (ID: ${matchingCustomer.id})`);
           console.log(`   🔄 Will UPDATE existing customer`);
         } else {
-          console.log(`   ❌ No match found for customer "${unleashedCustomer.CustomerCode}"`);
+          console.log(`   ❌ No match found for contact "${unleashedContact.Guid}"`);
           console.log(`   🆕 Will CREATE new customer`);
         }
 
-        // Prepare customer data
+        // Prepare customer data (from contact + associated customer metafields)
         const customerData = {
           firstName,
           lastName,
           email: validateEmail(email),
-          phone: unleashedCustomer.PhoneNumber || unleashedCustomer.MobileNumber,
+          phone: unleashedContact.OfficePhone || unleashedContact.MobilePhone,
           metafields: [
             {
               namespace: 'unleashed',
-              key: 'unleashed_customer_code',
-              value: unleashedCustomer.CustomerCode,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'unleashed',
-              key: 'unleashed_customer_name',
-              value: unleashedCustomer.CustomerName,
-              type: 'single_line_text_field'
-            },
-            {
-              namespace: 'unleashed',
-              key: 'unleashed_sell_price_tier',
-              value: unleashedCustomer.SellPriceTier || 'Default',
+              key: 'contact_guid',
+              value: unleashedContact.Guid,
               type: 'single_line_text_field'
             }
           ]
         };
+
+        // Add associated customer data as metafields if available
+        if (unleashedContact.CustomerCode && unleashedContact.CustomerName) {
+          customerData.metafields.push(
+            {
+              namespace: 'unleashed',
+              key: 'customer_code',
+              value: unleashedContact.CustomerCode,
+              type: 'single_line_text_field'
+            },
+            {
+              namespace: 'unleashed',
+              key: 'customer_name',
+              value: unleashedContact.CustomerName,
+              type: 'single_line_text_field'
+            }
+          );
+          
+          // Get the full customer data to access SellPriceTier
+          const fullCustomerData = customerLookup.get(unleashedContact.CustomerGuid);
+          if (fullCustomerData) {
+                         customerData.metafields.push({
+               namespace: 'unleashed',
+               key: 'sell_price_tier',
+               value: fullCustomerData.SellPriceTier || 'Default',
+               type: 'single_line_text_field'
+             });
+          }
+          
+          console.log(`   🏢 Adding customer metafields: ${unleashedContact.CustomerCode} - ${unleashedContact.CustomerName}`);
+        }
 
         if (matchingCustomer) {
           // Update existing customer
@@ -97,12 +128,12 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
         }
 
         results.processed++;
-        console.log(`   ✅ Customer "${unleashedCustomer.CustomerCode}" processed successfully`);
+        console.log(`   ✅ Contact "${unleashedContact.Guid}" processed successfully`);
         
       } catch (error) {
-        console.error(`   ❌ Error processing customer "${unleashedCustomer.CustomerCode}":`, error.message);
+        console.error(`   ❌ Error processing contact "${unleashedContact.Guid}":`, error.message);
         results.errors.push({
-          customerCode: unleashedCustomer.CustomerCode,
+          contactGuid: unleashedContact.Guid,
           error: error.message
         });
       }
@@ -110,7 +141,7 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
 
     // Final summary logging
     console.log('\n🎯 === CUSTOMER MAPPING SUMMARY ===');
-    console.log(`📊 Total processed: ${results.processed}/${unleashedCustomers.length}`);
+    console.log(`📊 Total processed: ${results.processed}/${unleashedContacts.length}`);
     console.log(`🆕 Customers to create: ${results.toCreate.length}`);
     console.log(`🔄 Customers to update: ${results.toUpdate.length}`);
     console.log(`❌ Errors encountered: ${results.errors.length}`);
@@ -132,7 +163,7 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
     if (results.errors.length > 0) {
       console.log('\n❌ ERRORS ENCOUNTERED:');
       results.errors.forEach((error, index) => {
-        console.log(`   ${index + 1}. Customer "${error.customerCode}": ${error.error}`);
+        console.log(`   ${index + 1}. Contact "${error.contactGuid}": ${error.error}`);
       });
     }
 

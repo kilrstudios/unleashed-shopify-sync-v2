@@ -58,7 +58,7 @@ async function fetchUnleashedData(authData) {
   const productsData = await productsResponse.json();
   results.products = productsData.Items || [];
 
-  // Customers
+  // Customers (company entities)
   const customersUrl = 'https://api.unleashedsoftware.com/Customers?pageSize=200&pageNumber=1';
   const customersResponse = await fetch(customersUrl, {
     method: 'GET',
@@ -66,6 +66,32 @@ async function fetchUnleashedData(authData) {
   });
   const customersData = await customersResponse.json();
   results.customers = customersData.Items || [];
+
+  // Contacts (individuals who should become Shopify customers)
+  // Fetch contacts for each customer
+  results.contacts = [];
+  for (const customer of results.customers) {
+    try {
+      const contactsUrl = `https://api.unleashedsoftware.com/Customers/${customer.Guid}/Contacts`;
+      const contactsResponse = await fetch(contactsUrl, {
+        method: 'GET',
+        headers: await createUnleashedHeaders(contactsUrl, authData.apiKey, authData.apiId)
+      });
+      const contactsData = await contactsResponse.json();
+      const customerContacts = contactsData.Items || [];
+      
+      // Add customer reference to each contact for easy lookup
+      customerContacts.forEach(contact => {
+        contact.CustomerGuid = customer.Guid;
+        contact.CustomerCode = customer.CustomerCode;
+        contact.CustomerName = customer.CustomerName;
+      });
+      
+      results.contacts.push(...customerContacts);
+    } catch (error) {
+      console.warn(`Failed to fetch contacts for customer ${customer.CustomerCode}:`, error.message);
+    }
+  }
 
   // Warehouses
   const warehousesUrl = 'https://api.unleashedsoftware.com/Warehouses';
@@ -184,7 +210,7 @@ async function fetchShopifyCustomers(baseUrl, headers) {
             email
             phone
             metafields(
-              keys: ["unleashed.unleashed_customer_code", "unleashed.unleashed_customer_name", "unleashed.unleashed_sell_price_tier"]
+              keys: ["unleashed.contact_guid", "unleashed.customer_code", "unleashed.customer_name", "unleashed.sell_price_tier"]
               first: 10
             ) {
               edges {

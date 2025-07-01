@@ -93,7 +93,8 @@ export async function handleCustomerMutations(request, env) {
     
     console.log('Data pulled successfully for mutations:', {
       unleashed: {
-        customers: data.unleashed.customers.length
+        customers: data.unleashed.customers.length,
+        contacts: data.unleashed.contacts.length
       },
       shopify: {
         customers: data.shopify.customers.length
@@ -102,7 +103,7 @@ export async function handleCustomerMutations(request, env) {
 
     // Perform customer mapping
     console.log('🗺️ Starting customer mapping for mutations...');
-    const customerMappingResults = await mapCustomers(data.unleashed.customers, data.shopify.customers);
+    const customerMappingResults = await mapCustomers(data.unleashed.contacts, data.unleashed.customers, data.shopify.customers);
     
     // Execute customer mutations
     console.log('🔄 Starting customer mutations...');
@@ -192,7 +193,8 @@ export async function handleCustomerSync(request, env) {
     
     console.log('Data pulled successfully:', {
       unleashed: {
-        customers: data.unleashed.customers.length
+        customers: data.unleashed.customers.length,
+        contacts: data.unleashed.contacts.length
       },
       shopify: {
         customers: data.shopify.customers.length
@@ -201,7 +203,7 @@ export async function handleCustomerSync(request, env) {
 
     // Step 2: Map customers from Unleashed to Shopify format
     console.log('🗺️ Step 2: Mapping customers from Unleashed to Shopify format...');
-    const customerMappingResults = await mapCustomers(data.unleashed.customers, data.shopify.customers);
+    const customerMappingResults = await mapCustomers(data.unleashed.contacts, data.unleashed.customers, data.shopify.customers);
     
     console.log('Customer mapping completed:', {
       toCreate: customerMappingResults.toCreate.length,
@@ -223,7 +225,8 @@ export async function handleCustomerSync(request, env) {
       steps: {
         dataFetch: {
           unleashed: {
-            customers: data.unleashed.customers.length
+            customers: data.unleashed.customers.length,
+            contacts: data.unleashed.contacts.length
           },
           shopify: {
             customers: data.shopify.customers.length
@@ -244,7 +247,8 @@ export async function handleCustomerSync(request, env) {
             successful: mutationResults.updated.successful.length,
             failed: mutationResults.updated.failed.length
           },
-          summary: mutationResults.summary
+          summary: mutationResults.summary,
+          debugErrors: mutationResults.debugErrors || []
         }
       },
       timestamp: new Date().toISOString()

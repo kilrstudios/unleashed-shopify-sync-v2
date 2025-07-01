@@ -409,7 +409,8 @@ export default {
     
     // Route requests
     if (url.pathname === '/api/v2/data-fetch' && request.method === 'POST') {
-      return handleDataFetch(request, env);
+      // Redirect data-fetch to sync-locations for backward compatibility
+      return handleLocationSync(request, env);
     }
     
     if (url.pathname === '/api/v2/mutate-locations' && request.method === 'POST') {

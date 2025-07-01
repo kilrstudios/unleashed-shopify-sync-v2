@@ -58,7 +58,8 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
   // Log all existing Shopify locations for reference
   console.log('📍 Existing Shopify locations:');
   shopifyLocations.forEach((loc, index) => {
-    console.log(`   ${index + 1}. "${loc.name}" (ID: ${loc.id})`);
+    const warehouseCode = loc.metafields && loc.metafields['custom.warehouse_code'];
+    console.log(`   ${index + 1}. "${loc.name}" (ID: ${loc.id}) - Warehouse Code: ${warehouseCode || 'None'}`);
   });
 
   try {
@@ -79,7 +80,7 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           PhoneNumber: warehouse.PhoneNumber
         });
 
-        // Generate location name (no longer including warehouse code)
+        // Generate location name (just the warehouse name)
         const locationName = warehouse.WarehouseName;
         console.log(`   🏷️ Generated location name: "${locationName}"`);
 
@@ -96,10 +97,11 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
         let mappedProvinceCode = warehouse.Region;
         console.log(`   🏛️ Province unchanged: "${mappedProvinceCode}"`);
 
-        console.log(`   🔍 Searching for matching Shopify location with name: "${locationName}"`);
+        console.log(`   🔍 Searching for matching Shopify location with warehouse code: "${warehouse.WarehouseCode}"`);
 
+        // Match by warehouse code metafield instead of name
         const matchingLocation = shopifyLocations.find(loc => 
-          loc.name === locationName
+          loc.metafields && loc.metafields['custom.warehouse_code'] === warehouse.WarehouseCode
         );
 
         let matchResult = {
@@ -116,7 +118,7 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           address2: warehouse.AddressLine2 || '',
           city: warehouse.City || 'Not specified',
           provinceCode: mappedProvinceCode,
-          countryCode: mappedCountryCode,
+          countryCode: mappedCountryCode || 'AU', // Default to AU if no country specified
           zip: warehouse.PostCode || '00000',
           phone: warehouse.PhoneNumber || '',
           warehouseCode: warehouse.WarehouseCode // For metafields
@@ -126,13 +128,14 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
 
         if (matchingLocation) {
           // Update existing location
-          console.log(`   ✅ Match found! Existing location ID: ${matchingLocation.id}`);
+          console.log(`   ✅ Match found! Existing location: "${matchingLocation.name}" (ID: ${matchingLocation.id})`);
           console.log(`   🔄 Will UPDATE existing location`);
           
           // Ensure location ID has the proper Shopify format
-          const locationId = matchingLocation.id.startsWith('gid://') 
-            ? matchingLocation.id 
-            : `gid://shopify/Location/${matchingLocation.id}`;
+          const idString = String(matchingLocation.id);
+          const locationId = idString.startsWith('gid://') 
+            ? idString 
+            : `gid://shopify/Location/${idString}`;
           
           locationData.id = locationId;
           results.toUpdate.push(locationData);
@@ -141,7 +144,7 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           
           // Log the differences for updates
           console.log(`   📝 Comparing current vs new data:`);
-          console.log(`      Name: "${matchingLocation.name}" (unchanged)`);
+          console.log(`      Name: "${matchingLocation.name}" → "${locationData.name}"`);
           if (matchingLocation.address) {
             console.log(`      Address1: "${matchingLocation.address.address1 || 'N/A'}" → "${locationData.address1}"`);
             console.log(`      City: "${matchingLocation.address.city || 'N/A'}" → "${locationData.city}"`);
@@ -152,7 +155,7 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
           }
         } else {
           // Create new location
-          console.log(`   ❌ No match found for "${locationName}"`);
+          console.log(`   ❌ No match found for warehouse code "${warehouse.WarehouseCode}"`);
           console.log(`   🆕 Will CREATE new location`);
           
           results.toCreate.push(locationData);

@@ -8,6 +8,7 @@ import { mapCustomers } from './customer-mapping.js';
 import { mapLocations } from './location-mapping.js';
 import { mapProducts } from './product-mapping.js';
 import { handleLocationMutations, handleLocationSync } from './location-mutation-handler.js';
+import { handleCustomerMutations, handleCustomerSync } from './customer-mutation-handler.js';
 
 // CORS headers for all responses
 const corsHeaders = {
@@ -419,6 +420,14 @@ export default {
     
     if (url.pathname === '/api/v2/sync-locations' && request.method === 'POST') {
       return handleLocationSync(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/mutate-customers' && request.method === 'POST') {
+      return handleCustomerMutations(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/sync-customers' && request.method === 'POST') {
+      return handleCustomerSync(request, env);
     }
     
     // Serve client script

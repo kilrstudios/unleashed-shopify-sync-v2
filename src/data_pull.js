@@ -224,9 +224,68 @@ async function fetchShopifyCustomers(baseUrl, headers) {
 }
 
 async function fetchShopifyLocations(baseUrl, headers) {
-  const response = await fetch(`${baseUrl}/locations.json`, { headers });
+  // Use GraphQL to get locations with metafields
+  const query = `
+    query GetLocations {
+      locations(first: 50) {
+        edges {
+          node {
+            id
+            name
+            address {
+              address1
+              address2
+              city
+              provinceCode
+              countryCode
+              zip
+              phone
+            }
+            metafields(first: 10, keys: ["custom.warehouse_code"]) {
+              edges {
+                node {
+                  id
+                  key
+                  value
+                  namespace
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query })
+  });
+
   const data = await response.json();
-  return data.locations;
+  
+  if (data.errors) {
+    throw new Error(`Shopify Locations GraphQL errors: ${JSON.stringify(data.errors)}`);
+  }
+
+  // Transform the GraphQL response to include metafields in a more accessible format
+  return data.data.locations.edges.map(edge => {
+    const location = edge.node;
+    const metafields = {};
+    
+    // Process metafields into a more accessible format
+    location.metafields.edges.forEach(metafieldEdge => {
+      const metafield = metafieldEdge.node;
+      const key = `${metafield.namespace}.${metafield.key}`;
+      metafields[key] = metafield.value;
+    });
+
+    return {
+      ...location,
+      metafields
+    };
+  });
 }
 
 async function fetchShopifyData(auth) {

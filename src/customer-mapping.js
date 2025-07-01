@@ -33,17 +33,20 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
             {
               namespace: 'unleashed',
               key: 'unleashed_customer_code',
-              value: unleashedCustomer.CustomerCode
+              value: unleashedCustomer.CustomerCode,
+              type: 'single_line_text_field'
             },
             {
               namespace: 'unleashed',
               key: 'unleashed_customer_name',
-              value: unleashedCustomer.CustomerName
+              value: unleashedCustomer.CustomerName,
+              type: 'single_line_text_field'
             },
             {
               namespace: 'unleashed',
               key: 'unleashed_sell_price_tier',
-              value: unleashedCustomer.SellPriceTier
+              value: unleashedCustomer.SellPriceTier || 'Default',
+              type: 'single_line_text_field'
             }
           ]
         };

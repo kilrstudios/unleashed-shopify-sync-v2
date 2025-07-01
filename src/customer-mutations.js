@@ -302,7 +302,7 @@ async function mutateCustomers(authData, mappingResults) {
   }
 }
 
-module.exports = {
+export {
   mutateCustomers,
   createCustomersBatch,
   updateCustomersBatch

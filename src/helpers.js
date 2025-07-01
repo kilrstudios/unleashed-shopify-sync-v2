@@ -18,7 +18,4 @@ function validateEmail(email) {
   throw new Error(`Invalid email format: ${email}`);
 }
 
-module.exports = {
-  slugify,
-  validateEmail
-}; 
+export { slugify, validateEmail }; 

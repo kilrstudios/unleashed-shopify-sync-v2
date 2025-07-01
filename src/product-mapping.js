@@ -1,4 +1,4 @@
-const { slugify } = require('./helpers');
+import { slugify } from './helpers.js';
 
 function generateVariantTitle(options) {
   if (!options || !options.length) return 'Default Title';
@@ -180,7 +180,7 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
   return results;
 }
 
-module.exports = {
+export {
   mapProducts,
   generateVariantTitle,
   groupUnleashedProducts

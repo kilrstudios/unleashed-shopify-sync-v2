@@ -256,7 +256,7 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
   return results;
 }
 
-module.exports = {
+export {
   mapLocations,
   COUNTRY_CODE_MAPPING,
   PROVINCE_CODE_MAPPING

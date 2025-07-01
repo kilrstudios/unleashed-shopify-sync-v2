@@ -1,4 +1,4 @@
-const { slugify, validateEmail } = require('./helpers');
+import { slugify, validateEmail } from './helpers.js';
 
 async function mapCustomers(unleashedCustomers, shopifyCustomers) {
   const results = {
@@ -75,6 +75,4 @@ async function mapCustomers(unleashedCustomers, shopifyCustomers) {
   return results;
 }
 
-module.exports = {
-  mapCustomers
-}; 
+export { mapCustomers }; 

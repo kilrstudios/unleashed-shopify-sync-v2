@@ -9,6 +9,7 @@ import { mapLocations } from './location-mapping.js';
 import { mapProducts } from './product-mapping.js';
 import { handleLocationMutations, handleLocationSync } from './location-mutation-handler.js';
 import { handleCustomerMutations, handleCustomerSync } from './customer-mutation-handler.js';
+import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
 
 // CORS headers for all responses
 const corsHeaders = {
@@ -410,10 +411,20 @@ export default {
     
     // Route requests
     if (url.pathname === '/api/v2/data-fetch' && request.method === 'POST') {
-      // Redirect data-fetch to sync-locations for backward compatibility
-      return handleLocationSync(request, env);
+      // Redirect data-fetch to comprehensive sync for full functionality
+      return handleComprehensiveSync(request, env);
     }
     
+    // Comprehensive sync endpoints (NEW - handles both locations and customers)
+    if (url.pathname === '/api/v2/comprehensive-sync' && request.method === 'POST') {
+      return handleComprehensiveSync(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/optimized-sync' && request.method === 'POST') {
+      return handleOptimizedSync(request, env);
+    }
+    
+    // Individual location endpoints
     if (url.pathname === '/api/v2/mutate-locations' && request.method === 'POST') {
       return handleLocationMutations(request, env);
     }
@@ -422,6 +433,7 @@ export default {
       return handleLocationSync(request, env);
     }
     
+    // Individual customer endpoints
     if (url.pathname === '/api/v2/mutate-customers' && request.method === 'POST') {
       return handleCustomerMutations(request, env);
     }

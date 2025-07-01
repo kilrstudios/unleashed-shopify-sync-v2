@@ -9,6 +9,7 @@ import { mapLocations } from './location-mapping.js';
 import { mapProducts } from './product-mapping.js';
 import { handleLocationMutations, handleLocationSync } from './location-mutation-handler.js';
 import { handleCustomerMutations, handleCustomerSync } from './customer-mutation-handler.js';
+import { handleProductMutations, handleProductSync } from './product-mutation-handler.js';
 import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
 
 // CORS headers for all responses
@@ -55,7 +56,7 @@ function serveClientScript() {
     const config = {
         workerUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/data-fetch",
         mutationUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/mutate-locations",
-        syncUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/sync-locations",
+        syncUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/comprehensive-sync",
         buttonAttribute: "kilr-unleashed-sync",
         mutateButtonAttribute: "kilr-unleashed-mutate-locations",
         syncButtonAttribute: "kilr-unleashed-sync-locations",
@@ -440,6 +441,15 @@ export default {
     
     if (url.pathname === '/api/v2/sync-customers' && request.method === 'POST') {
       return handleCustomerSync(request, env);
+    }
+    
+    // Individual product endpoints
+    if (url.pathname === '/api/v2/mutate-products' && request.method === 'POST') {
+      return handleProductMutations(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/sync-products' && request.method === 'POST') {
+      return handleProductSync(request, env);
     }
     
     // Serve client script

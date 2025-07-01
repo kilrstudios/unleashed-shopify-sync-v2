@@ -1,13 +1,15 @@
 /**
  * Comprehensive Sync Handler
- * Handles complete sync workflow for both locations and customers in optimal sequence
+ * Handles complete sync workflow for locations, customers, and products in optimal sequence
  */
 
 import { pullAllData } from './data_pull.js';
 import { mapLocations } from './location-mapping.js';
 import { mapCustomers } from './customer-mapping.js';
+import { mapProducts } from './product-mapping.js';
 import { mutateLocations } from './location-mutations.js';
 import { mutateCustomers } from './customer-mutations.js';
+import { mutateProducts } from './product-mutations.js';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -46,8 +48,8 @@ function jsonResponse(data, status = 200) {
 }
 
 /**
- * Complete sync workflow: Locations first, then Customers
- * This approach ensures warehouses/locations are set up before customer operations
+ * Complete sync workflow: Locations first, then Customers, then Products
+ * This approach ensures warehouses/locations are set up before customer and product operations
  */
 export async function handleComprehensiveSync(request, env) {
   const startTime = Date.now();
@@ -238,6 +240,70 @@ export async function handleComprehensiveSync(request, env) {
       }
 
       // ========================================
+      // STEP 4: PRODUCT SYNC
+      // ========================================
+      console.log('\n📦 Step 4: Product Sync...');
+      const productStepStart = Date.now();
+      
+      try {
+        // Map products
+        console.log('🗺️ Step 4a: Mapping products...');
+        const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
+        
+        // Execute product mutations (using bulk operations)
+        console.log('🔄 Step 4b: Executing product mutations...');
+        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults);
+
+        results.steps.productSync = {
+          success: true,
+          duration: `${((Date.now() - productStepStart) / 1000).toFixed(2)}s`,
+          mapping: {
+            toCreate: productMappingResults.toCreate.length,
+            toUpdate: productMappingResults.toUpdate.length,
+            toArchive: productMappingResults.toArchive.length,
+            errors: productMappingResults.errors.length,
+            processed: productMappingResults.processed
+          },
+          mutations: {
+            bulkOperation: {
+              success: productMutationResults.bulkOperation?.success || false,
+              operationId: productMutationResults.bulkOperation?.operation?.id || null,
+              error: productMutationResults.bulkOperation?.error || null
+            },
+            created: {
+              successful: productMutationResults.created.successful.length,
+              failed: productMutationResults.created.failed.length
+            },
+            updated: {
+              successful: productMutationResults.updated.successful.length,
+              failed: productMutationResults.updated.failed.length
+            },
+            archived: {
+              successful: productMutationResults.archived.successful.length,
+              failed: productMutationResults.archived.failed.length
+            },
+            inventory: {
+              successful: productMutationResults.inventory.successful.length,
+              failed: productMutationResults.inventory.failed.length
+            },
+            summary: productMutationResults.summary
+          }
+        };
+        
+        console.log('✅ Product sync completed:', results.steps.productSync.mutations.summary);
+        results.summary.successfulOperations++;
+        
+      } catch (error) {
+        console.error('❌ Product sync failed:', error);
+        results.steps.productSync = {
+          success: false,
+          duration: `${((Date.now() - productStepStart) / 1000).toFixed(2)}s`,
+          error: error.message
+        };
+        results.summary.failedOperations++;
+      }
+
+      // ========================================
       // FINAL SUMMARY
       // ========================================
       const totalDuration = Date.now() - startTime;
@@ -257,6 +323,10 @@ export async function handleComprehensiveSync(request, env) {
       if (results.steps.customerSync?.success) {
         const custSummary = results.steps.customerSync.mutations.summary;
         console.log(`👥 Customers: ${custSummary.totalCreated} created, ${custSummary.totalUpdated} updated, ${custSummary.totalFailed} failed`);
+      }
+      
+      if (results.steps.productSync?.success) {
+        console.log(`📦 Products: Bulk operation ${results.steps.productSync.mutations.bulkOperation.success ? 'completed' : 'failed'}, ${results.steps.productSync.mutations.archived.successful} archived`);
       }
 
       return jsonResponse(results);

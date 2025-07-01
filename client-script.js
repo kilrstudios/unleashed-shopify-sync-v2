@@ -3,7 +3,7 @@
     const config = {
         workerUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/sync-locations", // Use sync endpoint by default
         mutationUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/mutate-locations",
-        syncUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/sync-locations",
+        syncUrl: "https://unleashed-shopify-sync-v2.adrian-b0e.workers.dev/api/v2/comprehensive-sync",
         buttonAttribute: "kilr-unleashed-sync",
         mutateButtonAttribute: "kilr-unleashed-mutate-locations",
         syncButtonAttribute: "kilr-unleashed-sync-locations",

@@ -116,6 +116,7 @@ async function fetchShopifyProducts(baseUrl, headers) {
         edges {
           node {
             id
+            handle
             title
             tracksInventory
             totalInventory
@@ -168,7 +169,12 @@ async function fetchShopifyProducts(baseUrl, headers) {
             }
             description
             productType
+            vendor
             status
+            options {
+              name
+              values
+            }
           }
         }
         pageInfo {

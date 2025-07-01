@@ -178,8 +178,22 @@
 
                 // Log the mapping results
                 logMappingResults({
-                    customers: stats.unleashed.customers,
-                    products: stats.unleashed.products
+                    customers: {
+                        toCreate: [],
+                        toUpdate: [],
+                        errors: []
+                    },
+                    locations: {
+                        toCreate: [],
+                        toUpdate: [],
+                        errors: []
+                    },
+                    products: {
+                        toCreate: [],
+                        toUpdate: [],
+                        toArchive: [],
+                        errors: []
+                    }
                 });
             } else {
                 throw new Error(data.error || 'Sync failed');

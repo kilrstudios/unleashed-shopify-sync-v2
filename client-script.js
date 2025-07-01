@@ -295,6 +295,27 @@
     }
 
     function logMappingResults(results) {
+        // Ensure results object has the required structure
+        const safeResults = {
+            customers: {
+                toCreate: [],
+                toUpdate: [],
+                errors: []
+            },
+            locations: {
+                toCreate: [],
+                toUpdate: [],
+                errors: []
+            },
+            products: {
+                toCreate: [],
+                toUpdate: [],
+                toArchive: [],
+                errors: []
+            },
+            ...results
+        };
+
         // Style definitions for console output
         const styles = {
             create: 'color: #4CAF50; font-weight: bold',  // Green
@@ -304,124 +325,118 @@
         };
 
         // Log customers
-        if (results.customers) {
-            console.group('%cCustomer Mapping Results', styles.header);
-            
-            if (results.customers.toCreate.length) {
-                console.group('%cCustomers to Create:', styles.create);
-                results.customers.toCreate.forEach(customer => 
-                    console.table([formatCustomerForLog(customer)])
-                );
-                console.groupEnd();
-            }
-
-            if (results.customers.toUpdate.length) {
-                console.group('%cCustomers to Update:', styles.update);
-                results.customers.toUpdate.forEach(customer => 
-                    console.table([formatCustomerForLog(customer)])
-                );
-                console.groupEnd();
-            }
-
-            if (results.customers.errors.length) {
-                console.group('%cCustomer Errors:', styles.archive);
-                console.table(results.customers.errors);
-                console.groupEnd();
-            }
-
+        console.group('%cCustomer Mapping Results', styles.header);
+        
+        if (safeResults.customers.toCreate?.length) {
+            console.group('%cCustomers to Create:', styles.create);
+            safeResults.customers.toCreate.forEach(customer => 
+                console.table([formatCustomerForLog(customer)])
+            );
             console.groupEnd();
         }
+
+        if (safeResults.customers.toUpdate?.length) {
+            console.group('%cCustomers to Update:', styles.update);
+            safeResults.customers.toUpdate.forEach(customer => 
+                console.table([formatCustomerForLog(customer)])
+            );
+            console.groupEnd();
+        }
+
+        if (safeResults.customers.errors?.length) {
+            console.group('%cCustomer Errors:', styles.archive);
+            console.table(safeResults.customers.errors);
+            console.groupEnd();
+        }
+
+        console.groupEnd();
 
         // Log locations
-        if (results.locations) {
-            console.group('%cLocation Mapping Results', styles.header);
-            
-            if (results.locations.toCreate.length) {
-                console.group('%cLocations to Create:', styles.create);
-                results.locations.toCreate.forEach(location => 
-                    console.table([formatLocationForLog(location)])
-                );
-                console.groupEnd();
-            }
-
-            if (results.locations.toUpdate.length) {
-                console.group('%cLocations to Update:', styles.update);
-                results.locations.toUpdate.forEach(location => 
-                    console.table([formatLocationForLog(location)])
-                );
-                console.groupEnd();
-            }
-
-            if (results.locations.errors.length) {
-                console.group('%cLocation Errors:', styles.archive);
-                console.table(results.locations.errors);
-                console.groupEnd();
-            }
-
+        console.group('%cLocation Mapping Results', styles.header);
+        
+        if (safeResults.locations.toCreate?.length) {
+            console.group('%cLocations to Create:', styles.create);
+            safeResults.locations.toCreate.forEach(location => 
+                console.table([formatLocationForLog(location)])
+            );
             console.groupEnd();
         }
+
+        if (safeResults.locations.toUpdate?.length) {
+            console.group('%cLocations to Update:', styles.update);
+            safeResults.locations.toUpdate.forEach(location => 
+                console.table([formatLocationForLog(location)])
+            );
+            console.groupEnd();
+        }
+
+        if (safeResults.locations.errors?.length) {
+            console.group('%cLocation Errors:', styles.archive);
+            console.table(safeResults.locations.errors);
+            console.groupEnd();
+        }
+
+        console.groupEnd();
 
         // Log products
-        if (results.products) {
-            console.group('%cProduct Mapping Results', styles.header);
-            
-            if (results.products.toCreate.length) {
-                console.group('%cProducts to Create:', styles.create);
-                results.products.toCreate.forEach(product => {
-                    console.group(`%c${product.title}`, styles.create);
-                    console.table([formatProductForLog(product)]);
-                    console.table(product.variants);
-                    console.groupEnd();
-                });
+        console.group('%cProduct Mapping Results', styles.header);
+        
+        if (safeResults.products.toCreate?.length) {
+            console.group('%cProducts to Create:', styles.create);
+            safeResults.products.toCreate.forEach(product => {
+                console.group(`%c${product.title}`, styles.create);
+                console.table([formatProductForLog(product)]);
+                console.table(product.variants);
                 console.groupEnd();
-            }
-
-            if (results.products.toUpdate.length) {
-                console.group('%cProducts to Update:', styles.update);
-                results.products.toUpdate.forEach(product => {
-                    console.group(`%c${product.title}`, styles.update);
-                    console.table([formatProductForLog(product)]);
-                    console.table(product.variants);
-                    console.groupEnd();
-                });
-                console.groupEnd();
-            }
-
-            if (results.products.toArchive.length) {
-                console.group('%cProducts to Archive:', styles.archive);
-                results.products.toArchive.forEach(product => 
-                    console.table([formatProductForLog(product)])
-                );
-                console.groupEnd();
-            }
-
-            if (results.products.errors.length) {
-                console.group('%cProduct Errors:', styles.archive);
-                console.table(results.products.errors);
-                console.groupEnd();
-            }
-
+            });
             console.groupEnd();
         }
+
+        if (safeResults.products.toUpdate?.length) {
+            console.group('%cProducts to Update:', styles.update);
+            safeResults.products.toUpdate.forEach(product => {
+                console.group(`%c${product.title}`, styles.update);
+                console.table([formatProductForLog(product)]);
+                console.table(product.variants);
+                console.groupEnd();
+            });
+            console.groupEnd();
+        }
+
+        if (safeResults.products.toArchive?.length) {
+            console.group('%cProducts to Archive:', styles.archive);
+            safeResults.products.toArchive.forEach(product => 
+                console.table([formatProductForLog(product)])
+            );
+            console.groupEnd();
+        }
+
+        if (safeResults.products.errors?.length) {
+            console.group('%cProduct Errors:', styles.archive);
+            console.table(safeResults.products.errors);
+            console.groupEnd();
+        }
+
+        console.groupEnd();
 
         // Log summary
         console.group('%cSummary', styles.header);
         console.table({
             customers: {
-                toCreate: results.customers?.toCreate.length || 0,
-                toUpdate: results.customers?.toUpdate.length || 0,
-                errors: results.customers?.errors.length || 0
+                toCreate: safeResults.customers?.toCreate?.length || 0,
+                toUpdate: safeResults.customers?.toUpdate?.length || 0,
+                errors: safeResults.customers?.errors?.length || 0
             },
             locations: {
-                toCreate: results.locations?.toCreate.length || 0,
-                toUpdate: results.locations?.toUpdate.length || 0,
-                errors: results.locations?.errors.length || 0
+                toCreate: safeResults.locations?.toCreate?.length || 0,
+                toUpdate: safeResults.locations?.toUpdate?.length || 0,
+                errors: safeResults.locations?.errors?.length || 0
             },
             products: {
-                toCreate: results.products?.toCreate.length || 0,
-                toUpdate: results.products?.toUpdate.length || 0,
-                toArchive: results.products?.toArchive.length || 0,
-                errors: results.products?.errors.length || 0
+                toCreate: safeResults.products?.toCreate?.length || 0,
+                toUpdate: safeResults.products?.toUpdate?.length || 0,
+                toArchive: safeResults.products?.toArchive?.length || 0,
+                errors: safeResults.products?.errors?.length || 0
             }
         });
         console.groupEnd();

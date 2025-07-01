@@ -177,24 +177,15 @@
                 updateButtonState(button, "success");
 
                 // Log the mapping results
-                logMappingResults({
-                    customers: {
-                        toCreate: [],
-                        toUpdate: [],
-                        errors: []
-                    },
-                    locations: {
-                        toCreate: [],
-                        toUpdate: [],
-                        errors: []
-                    },
-                    products: {
-                        toCreate: [],
-                        toUpdate: [],
-                        toArchive: [],
-                        errors: []
-                    }
-                });
+                if (data.mappingResults) {
+                    logMappingResults(data.mappingResults);
+                } else {
+                    logMappingResults({
+                        customers: { toCreate: [], toUpdate: [], errors: [] },
+                        locations: { toCreate: [], toUpdate: [], errors: [] },
+                        products: { toCreate: [], toUpdate: [], toArchive: [], errors: [] }
+                    });
+                }
             } else {
                 throw new Error(data.error || 'Sync failed');
             }

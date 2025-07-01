@@ -120,7 +120,7 @@
         }
     }
 
-    // Handle sync (data mapping only)
+    // Handle sync (complete workflow - mapping + mutations)
     function handleSync(event) {
         event.preventDefault();
         const button = event.currentTarget;
@@ -142,8 +142,8 @@
         // Update button state
         updateButtonState(button, "loading");
 
-        // Make the request
-        fetch(config.workerUrl, {
+        // Make the request to the complete sync endpoint
+        fetch(config.syncUrl, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -163,32 +163,19 @@
         .then(data => {
             console.log('Data received:', data);
             if (data.success) {
-                const stats = data.data;
-                const unleashedStats = {
-                    products: stats.unleashed.products.length,
-                    customers: stats.unleashed.customers.length,
-                    warehouses: stats.unleashed.warehouses.length
-                };
-                const shopifyStats = {
-                    products: stats.shopify.products.length,
-                    customers: stats.shopify.customers.length,
-                    locations: stats.shopify.locations.length
-                };
+                // Handle sync response (includes both mapping and mutation results)
+                const mapping = data.mappingResults;
+                const mutations = data.mutationResults;
+                
                 showNotification(
-                    `Successfully synced data. Unleashed: ${unleashedStats.products} products, ${unleashedStats.customers} customers, ${unleashedStats.warehouses} warehouses. Shopify: ${shopifyStats.products} products, ${shopifyStats.customers} customers, ${shopifyStats.locations} locations.`,
-                    "success"
+                    `Sync complete! Locations: ${mutations.successCount} processed, ${mutations.errors.length} errors`,
+                    mutations.errors.length > 0 ? "error" : "success"
                 );
-                updateButtonState(button, "success");
+                updateButtonState(button, mutations.errors.length > 0 ? "error" : "success");
 
-                // Log the mapping results
-                if (data.mappingResults) {
-                    logMappingResults(data.mappingResults);
-                } else {
-                    logMappingResults({
-                        customers: { toCreate: [], toUpdate: [], errors: [] },
-                        locations: { toCreate: [], toUpdate: [], errors: [] },
-                        products: { toCreate: [], toUpdate: [], toArchive: [], errors: [] }
-                    });
+                // Log the complete sync results
+                if (data.mappingResults && data.mutationResults) {
+                    logSyncResults(data);
                 }
             } else {
                 throw new Error(data.error || 'Sync failed');

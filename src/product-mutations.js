@@ -554,9 +554,176 @@ async function archiveProducts(baseUrl, headers, productsToArchive) {
   return results;
 }
 
-// Main function to execute all product mutations
-async function mutateProducts(shopifyAuth, mappingResults) {
-  console.log('🚀 === STARTING PRODUCT MUTATIONS ===');
+// Individual product mutations (fallback method)
+async function mutateProductsIndividually(baseUrl, headers, products, isUpdate = false) {
+  const results = { successful: [], failed: [] };
+  const batchSize = 10;
+  let requestCount = 0;
+  
+  console.log(`🔄 Processing ${products.length} products individually in batches of ${batchSize}...`);
+  
+  for (let i = 0; i < products.length; i += batchSize) {
+    const batch = products.slice(i, i + batchSize);
+    console.log(`📦 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(products.length / batchSize)} (${batch.length} products)`);
+    
+    const batchPromises = batch.map(async (product) => {
+      try {
+        requestCount++;
+        console.log(`🛠️ ${isUpdate ? 'Updating' : 'Creating'} product: "${product.title}" (Request #${requestCount})`);
+        
+        const mutation = `
+          mutation productSet($input: ProductSetInput!) {
+            productSet(input: $input) {
+              product {
+                id
+                title
+                handle
+                variants(first: 50) {
+                  nodes {
+                    id
+                    sku
+                    inventoryItem {
+                      id
+                    }
+                  }
+                }
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+
+        const variables = buildProductSetInput(product, isUpdate);
+        
+        const response = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: mutation,
+            variables
+          })
+        });
+
+        const data = await response.json();
+        
+        if (data.errors) {
+          throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
+        }
+
+        if (data.data.productSet.userErrors.length > 0) {
+          throw new Error(`Product errors: ${JSON.stringify(data.data.productSet.userErrors)}`);
+        }
+
+        results.successful.push({
+          original: product,
+          result: data.data.productSet.product
+        });
+
+        console.log(`✅ Successfully ${isUpdate ? 'updated' : 'created'} product: "${data.data.productSet.product.title}"`);
+
+      } catch (error) {
+        console.error(`❌ Failed to ${isUpdate ? 'update' : 'create'} product "${product.title}":`, error.message);
+        results.failed.push({
+          product: product,
+          error: error.message
+        });
+      }
+    });
+
+    await Promise.all(batchPromises);
+    
+    // Brief delay between batches to avoid rate limiting
+    if (i + batchSize < products.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  console.log(`✅ Individual processing completed: ${results.successful.length} successful, ${results.failed.length} failed`);
+  return results;
+}
+
+// Queue-based product mutations (primary method)
+async function mutateProductsViaQueue(env, shopifyAuth, mappingResults) {
+  console.log('🚀 === STARTING QUEUE-BASED PRODUCT MUTATIONS ===');
+  
+  const { shopDomain } = shopifyAuth;
+  const syncId = crypto.randomUUID();
+  
+  const results = {
+    method: 'queue_based',
+    syncId,
+    queued: { creates: 0, updates: 0, archives: 0 },
+    summary: '',
+    errors: []
+  };
+
+  try {
+    // Queue product creates
+    for (const product of mappingResults.toCreate) {
+      const message = {
+        type: 'CREATE_PRODUCT',
+        syncId,
+        domain: shopDomain,
+        productData: product,
+        timestamp: new Date().toISOString()
+      };
+      
+      await env.PRODUCT_QUEUE.send(message);
+      results.queued.creates++;
+    }
+
+    // Queue product updates  
+    for (const product of mappingResults.toUpdate) {
+      const message = {
+        type: 'UPDATE_PRODUCT', 
+        syncId,
+        domain: shopDomain,
+        productData: product,
+        timestamp: new Date().toISOString()
+      };
+      
+      await env.PRODUCT_QUEUE.send(message);
+      results.queued.updates++;
+    }
+
+    // Queue product archives
+    for (const product of mappingResults.toArchive) {
+      const message = {
+        type: 'ARCHIVE_PRODUCT',
+        syncId, 
+        domain: shopDomain,
+        productData: product,
+        timestamp: new Date().toISOString()
+      };
+      
+      await env.PRODUCT_QUEUE.send(message);
+      results.queued.archives++;
+    }
+
+    const totalQueued = results.queued.creates + results.queued.updates + results.queued.archives;
+    results.summary = `Queued ${totalQueued} product operations (${results.queued.creates} creates, ${results.queued.updates} updates, ${results.queued.archives} archives) - Processing in background`;
+    
+    console.log(`✅ Queued ${totalQueued} product operations with sync ID: ${syncId}`);
+
+  } catch (error) {
+    console.error('🚨 Queue-based product mutations failed:', error);
+    results.errors.push({
+      type: 'queue_error',
+      message: error.message
+    });
+    results.summary = `Queue operation failed: ${error.message}`;
+  }
+
+  console.log('✅ === QUEUE-BASED PRODUCT MUTATIONS COMPLETE ===');
+  return results;
+}
+
+// Fallback: Individual product mutations for small batches or queue failures
+async function mutateProductsDirect(shopifyAuth, mappingResults) {
+  console.log('🚀 === STARTING DIRECT PRODUCT MUTATIONS ===');
   
   const { accessToken, shopDomain } = shopifyAuth;
   const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
@@ -566,80 +733,39 @@ async function mutateProducts(shopifyAuth, mappingResults) {
   };
 
   const results = {
-    bulkOperation: null,
     created: { successful: [], failed: [] },
     updated: { successful: [], failed: [] },
     archived: { successful: [], failed: [] },
-    inventory: { successful: [], failed: [] },
+    method: 'direct_individual',
     summary: '',
     errors: []
   };
 
   try {
-    // Step 1: Handle bulk operations for creates and updates
-    const hasProductUpdates = mappingResults.toCreate.length > 0 || mappingResults.toUpdate.length > 0;
+    // Use individual operations directly
+    if (mappingResults.toCreate.length > 0) {
+      console.log(`🔄 Creating ${mappingResults.toCreate.length} products...`);
+      const createResults = await mutateProductsIndividually(baseUrl, headers, mappingResults.toCreate, false);
+      results.created = createResults;
+    }
     
-    if (hasProductUpdates) {
-      console.log(`🔄 Step 1: Preparing bulk operation for ${mappingResults.toCreate.length} creates and ${mappingResults.toUpdate.length} updates...`);
-      
-      // Create JSONL content
-      const jsonlContent = createBulkOperationJsonl(mappingResults.toCreate, mappingResults.toUpdate);
-      console.log(`📄 Generated JSONL with ${jsonlContent.split('\n').length} operations`);
-      
-      // Upload JSONL file
-      const stagedUploadUrl = await uploadJsonlFile(baseUrl, headers, jsonlContent);
-      
-      // Start bulk operation
-      const bulkOperation = await startBulkOperation(baseUrl, headers, stagedUploadUrl);
-      
-      // Monitor operation completion
-      const operationResult = await monitorBulkOperation(baseUrl, headers, bulkOperation.id);
-      
-      results.bulkOperation = operationResult;
-      
-      if (operationResult.success) {
-        // Parse results
-        const bulkResults = await parseBulkOperationResults(operationResult.resultUrl);
-        
-        // Process bulk results
-        bulkResults.forEach(result => {
-          if (result.data && result.data.productSet) {
-            const productSet = result.data.productSet;
-            if (productSet.userErrors && productSet.userErrors.length > 0) {
-              results.errors.push({
-                type: 'bulk_product_error',
-                errors: productSet.userErrors
-              });
-            } else if (productSet.product) {
-              // Determine if this was a create or update based on whether we provided an ID
-              // This is a simplification - in a real implementation you might want to track this more precisely
-              results.created.successful.push(productSet.product);
-            }
-          }
-        });
-        
-        console.log(`✅ Bulk operation completed successfully`);
-      } else {
-        throw new Error(`Bulk operation failed: ${operationResult.error}`);
-      }
+    if (mappingResults.toUpdate.length > 0) {
+      console.log(`🔄 Updating ${mappingResults.toUpdate.length} products...`);
+      const updateResults = await mutateProductsIndividually(baseUrl, headers, mappingResults.toUpdate, true);
+      results.updated = updateResults;
     }
 
-    // Step 2: Handle product archival (individual operations)
     if (mappingResults.toArchive.length > 0) {
-      console.log(`🗄️ Step 2: Archiving ${mappingResults.toArchive.length} products...`);
+      console.log(`🗄️ Archiving ${mappingResults.toArchive.length} products...`);
       const archiveResults = await archiveProducts(baseUrl, headers, mappingResults.toArchive);
       results.archived = archiveResults;
     }
-
-    // Step 3: Handle inventory updates (if needed)
-    // Note: Inventory updates would need to be prepared based on the bulk operation results
-    // This is a placeholder for now - you would need to implement inventory delta calculation
     
     // Generate summary
-    results.summary = `Products: ${results.created.successful.length} created, ${results.updated.successful.length} updated, ${results.archived.successful.length} archived. Errors: ${results.errors.length}`;
+    results.summary = `Products: ${results.created.successful.length} created, ${results.updated.successful.length} updated, ${results.archived.successful.length} archived (direct). Errors: ${results.errors.length}`;
 
   } catch (error) {
-    console.error('🚨 Product mutations failed:', error);
+    console.error('🚨 Direct product mutations failed:', error);
     results.errors.push({
       type: 'critical_error',
       message: error.message
@@ -647,8 +773,320 @@ async function mutateProducts(shopifyAuth, mappingResults) {
     results.summary = `Product mutations failed: ${error.message}`;
   }
 
-  console.log('✅ === PRODUCT MUTATIONS COMPLETE ===');
+  console.log('✅ === DIRECT PRODUCT MUTATIONS COMPLETE ===');
   return results;
+}
+
+// Main function: Decides between queue and direct methods
+async function mutateProducts(shopifyAuth, mappingResults, env = null) {
+  const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
+  
+  // Decide strategy based on availability and volume
+  const useQueue = env && env.PRODUCT_QUEUE && totalOperations > 5; // Use queue for > 5 operations
+  
+  if (useQueue) {
+    console.log(`📋 Using queue-based mutations for ${totalOperations} operations`);
+    return await mutateProductsViaQueue(env, shopifyAuth, mappingResults);
+  } else {
+    console.log(`🔄 Using direct mutations for ${totalOperations} operations`);
+    return await mutateProductsDirect(shopifyAuth, mappingResults);
+  }
+}
+
+// Queue consumer: Processes individual product mutations
+async function handleProductQueueMessage(message, env) {
+  console.log(`🔄 Processing queue message: ${message.type} for ${message.productData.title}`);
+  
+  try {
+    // Get auth data for the domain
+    const authData = await getAuthData(env, message.domain);
+    const { accessToken } = authData.shopify;
+    const baseUrl = `https://${message.domain}/admin/api/2025-04`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': accessToken
+    };
+
+    let result = null;
+
+    switch (message.type) {
+      case 'CREATE_PRODUCT':
+      case 'UPDATE_PRODUCT':
+        console.log(`🛠️ ${message.type === 'CREATE_PRODUCT' ? 'Creating' : 'Updating'} product: ${message.productData.title}`);
+        
+        const mutation = `
+          mutation productSet($input: ProductSetInput!) {
+            productSet(input: $input) {
+              product {
+                id
+                title
+                handle
+                variants(first: 50) {
+                  nodes {
+                    id
+                    sku
+                    inventoryItem {
+                      id
+                    }
+                  }
+                }
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+
+        const variables = buildProductSetInput(message.productData, message.type === 'UPDATE_PRODUCT');
+        
+        const response = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ query: mutation, variables })
+        });
+
+        const data = await response.json();
+        
+        if (data.errors) {
+          throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
+        }
+
+        if (data.data.productSet.userErrors.length > 0) {
+          throw new Error(`Product errors: ${JSON.stringify(data.data.productSet.userErrors)}`);
+        }
+
+        result = data.data.productSet.product;
+        console.log(`✅ Successfully ${message.type === 'CREATE_PRODUCT' ? 'created' : 'updated'} product: ${result.title}`);
+
+        // TODO: Trigger inventory and image callbacks here
+        // await triggerInventoryCallback(result, message, env);
+        // await triggerImageCallback(result, message, env);
+        
+        break;
+
+      case 'ARCHIVE_PRODUCT':
+        console.log(`🗄️ Archiving product: ${message.productData.id}`);
+        
+        const archiveMutation = `
+          mutation productUpdate($input: ProductInput!) {
+            productUpdate(input: $input) {
+              product {
+                id
+                status
+                title
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+
+        const archiveResponse = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: archiveMutation,
+            variables: {
+              input: {
+                id: message.productData.id,
+                status: 'ARCHIVED'
+              }
+            }
+          })
+        });
+
+        const archiveData = await archiveResponse.json();
+        
+        if (archiveData.errors || archiveData.data.productUpdate.userErrors.length > 0) {
+          throw new Error(`Archive failed: ${JSON.stringify(archiveData.errors || archiveData.data.productUpdate.userErrors)}`);
+        }
+
+        result = archiveData.data.productUpdate.product;
+        console.log(`✅ Successfully archived product: ${result.title}`);
+        
+        break;
+
+      default:
+        throw new Error(`Unknown message type: ${message.type}`);
+    }
+
+    return { success: true, result };
+
+  } catch (error) {
+    console.error(`❌ Queue message processing failed:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Handle inventory updates for a specific product
+async function handleInventoryUpdate(request, env) {
+  try {
+    const body = await request.json();
+    const { domain, productId, variants, inventoryLevels } = body;
+
+    console.log(`📦 Handling inventory update for product ${productId}`);
+
+    // Get auth data
+    const authData = await getAuthData(env, domain);
+    const { accessToken } = authData.shopify;
+    const baseUrl = `https://${domain}/admin/api/2025-04`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': accessToken
+    };
+
+    // Process inventory updates for each variant
+    const results = { successful: [], failed: [] };
+    
+    for (const update of inventoryLevels) {
+      try {
+        const mutation = `
+          mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) {
+              inventoryAdjustmentGroup {
+                id
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+
+        const response = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: mutation,
+            variables: {
+              input: {
+                locationId: update.locationId,
+                inventoryItemAdjustments: [{
+                  inventoryItemId: update.inventoryItemId,
+                  availableDelta: update.delta
+                }]
+              }
+            }
+          })
+        });
+
+        const data = await response.json();
+        
+        if (data.errors || data.data.inventorySetQuantities.userErrors.length > 0) {
+          throw new Error(`Inventory error: ${JSON.stringify(data.errors || data.data.inventorySetQuantities.userErrors)}`);
+        }
+
+        results.successful.push(update);
+        console.log(`✅ Updated inventory for variant ${update.inventoryItemId}`);
+
+      } catch (error) {
+        console.error(`❌ Inventory update failed for ${update.inventoryItemId}:`, error.message);
+        results.failed.push({ ...update, error: error.message });
+      }
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      results,
+      summary: `${results.successful.length} successful, ${results.failed.length} failed`
+    }), { headers: { 'Content-Type': 'application/json' } });
+
+  } catch (error) {
+    console.error('❌ Inventory update handler failed:', error);
+    return new Response(JSON.stringify({
+      success: false,
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
+}
+
+// Handle image attachments for a specific product
+async function handleImageUpdate(request, env) {
+  try {
+    const body = await request.json();
+    const { domain, productId, variants, images } = body;
+
+    console.log(`🖼️ Handling image update for product ${productId}`);
+
+    // Get auth data
+    const authData = await getAuthData(env, domain);
+    const { accessToken } = authData.shopify;
+    const baseUrl = `https://${domain}/admin/api/2025-04`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': accessToken
+    };
+
+    // Process image attachments
+    const results = { successful: [], failed: [] };
+    
+    for (const imageData of images) {
+      try {
+        const mutation = `
+          mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
+            productAppendImages(productId: $productId, images: $images) {
+              images {
+                id
+                url
+                altText
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+
+        const response = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: mutation,
+            variables: {
+              productId,
+              images: [{
+                src: imageData.src,
+                altText: imageData.altText || '',
+                variantIds: imageData.variantIds || []
+              }]
+            }
+          })
+        });
+
+        const data = await response.json();
+        
+        if (data.errors || data.data.productAppendImages.userErrors.length > 0) {
+          throw new Error(`Image error: ${JSON.stringify(data.errors || data.data.productAppendImages.userErrors)}`);
+        }
+
+        results.successful.push(imageData);
+        console.log(`✅ Attached image to product ${productId}`);
+
+      } catch (error) {
+        console.error(`❌ Image attachment failed:`, error.message);
+        results.failed.push({ ...imageData, error: error.message });
+      }
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      results,
+      summary: `${results.successful.length} successful, ${results.failed.length} failed`
+    }), { headers: { 'Content-Type': 'application/json' } });
+
+  } catch (error) {
+    console.error('❌ Image update handler failed:', error);
+    return new Response(JSON.stringify({
+      success: false,
+      error: error.message
+    }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
 }
 
 export {
@@ -657,5 +1095,8 @@ export {
   createBulkOperationJsonl,
   monitorBulkOperation,
   updateInventoryLevels,
-  archiveProducts
+  archiveProducts,
+  handleProductQueueMessage,
+  handleInventoryUpdate,
+  handleImageUpdate
 }; 

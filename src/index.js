@@ -11,6 +11,7 @@ import { handleLocationMutations, handleLocationSync } from './location-mutation
 import { handleCustomerMutations, handleCustomerSync } from './customer-mutation-handler.js';
 import { handleProductMutations, handleProductSync } from './product-mutation-handler.js';
 import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
+import { handleProductQueueMessage, handleInventoryUpdate, handleImageUpdate } from './product-mutations.js';
 
 // CORS headers for all responses
 const corsHeaders = {
@@ -452,6 +453,15 @@ export default {
       return handleProductSync(request, env);
     }
     
+    // Product callback endpoints (for queue processing)
+    if (url.pathname === '/api/v2/products/inventory-update' && request.method === 'POST') {
+      return handleInventoryUpdate(request, env);
+    }
+    
+    if (url.pathname === '/api/v2/products/image-update' && request.method === 'POST') {
+      return handleImageUpdate(request, env);
+    }
+    
     // Serve client script
     if (url.pathname === '/client-script.js' && request.method === 'GET') {
       return serveClientScript();
@@ -459,4 +469,27 @@ export default {
 
     return new Response('Not Found', { status: 404 });
   },
+
+  // Queue consumer for product mutations
+  async queue(batch, env) {
+    console.log(`🔄 Processing ${batch.messages.length} queue messages`);
+    
+    for (const message of batch.messages) {
+      try {
+        console.log(`Processing message: ${message.body.type} for ${message.body.productData?.title || 'unknown product'}`);
+        const result = await handleProductQueueMessage(message.body, env);
+        
+        if (result.success) {
+          console.log(`✅ Successfully processed ${message.body.type}`);
+          message.ack();
+        } else {
+          console.error(`❌ Failed to process ${message.body.type}: ${result.error}`);
+          message.retry();
+        }
+      } catch (error) {
+        console.error(`🚨 Queue message processing error:`, error);
+        message.retry();
+      }
+    }
+  }
 }; 

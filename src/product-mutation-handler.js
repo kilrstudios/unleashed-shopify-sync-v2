@@ -98,7 +98,7 @@ export async function handleProductMutations(request, env) {
     
     // Execute product mutations
     console.log('🔄 Starting product mutations...');
-    const mutationResults = await mutateProducts(authData.shopify, productMappingResults);
+    const mutationResults = await mutateProducts(authData.shopify, productMappingResults, env);
 
     console.log('✅ Product mutations completed successfully');
 
@@ -217,7 +217,7 @@ export async function handleProductSync(request, env) {
 
     // Step 4: Execute mutations on Shopify
     console.log('🔄 Step 4: Executing product mutations on Shopify...');
-    const mutationResults = await mutateProducts(authData.shopify, productMappingResults);
+    const mutationResults = await mutateProducts(authData.shopify, productMappingResults, env);
 
     console.log('✅ Complete product sync workflow completed successfully');
 

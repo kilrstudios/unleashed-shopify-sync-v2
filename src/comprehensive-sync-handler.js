@@ -250,9 +250,9 @@ export async function handleComprehensiveSync(request, env) {
         console.log('🗺️ Step 4a: Mapping products...');
         const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
         
-        // Execute product mutations (using bulk operations)
+        // Execute product mutations (using queue-based approach)
         console.log('🔄 Step 4b: Executing product mutations...');
-        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults);
+        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env);
 
         results.steps.productSync = {
           success: true,

@@ -232,8 +232,31 @@
             initializeButtons();
         }
 
-        // Watch for DOM changes
-        new MutationObserver(initializeButtons).observe(t.body, {
+        // Watch for DOM changes - but only for new buttons, not all changes
+        const observer = new MutationObserver((mutations) => {
+            let shouldReinitialize = false;
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === 1) { // Element node
+                        // Check if the added node is a button or contains buttons
+                        if (node.matches && node.matches(`[${config.buttonAttribute}="button"]`)) {
+                            shouldReinitialize = true;
+                        } else if (node.querySelector) {
+                            const hasButtons = node.querySelector(`[${config.buttonAttribute}="button"]`);
+                            if (hasButtons) {
+                                shouldReinitialize = true;
+                            }
+                        }
+                    }
+                });
+            });
+            
+            if (shouldReinitialize) {
+                initializeButtons();
+            }
+        });
+        
+        observer.observe(t.body, {
             childList: true,
             subtree: true
         });
@@ -465,4 +488,4 @@
         }
     };
     */
-}(window, document); 
+}(window, document); // Cache bust: Tue Jul  1 17:05:13 AEST 2025

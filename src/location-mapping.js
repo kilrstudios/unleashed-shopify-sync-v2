@@ -99,10 +99,26 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
 
         console.log(`   🔍 Searching for matching Shopify location with warehouse code: "${warehouse.WarehouseCode}"`);
 
-        // Match by warehouse code metafield instead of name
-        const matchingLocation = shopifyLocations.find(loc => 
+        // Match by warehouse code metafield first, then fallback to name matching
+        let matchingLocation = shopifyLocations.find(loc => 
           loc.metafields && loc.metafields['custom.warehouse_code'] === warehouse.WarehouseCode
         );
+
+        // If no warehouse code match found, try matching by name as fallback
+        if (!matchingLocation) {
+          console.log(`   🔄 No warehouse code match found, trying name-based matching...`);
+          matchingLocation = shopifyLocations.find(loc => 
+            loc.name.toLowerCase().trim() === locationName.toLowerCase().trim()
+          );
+          
+          if (matchingLocation) {
+            console.log(`   📋 Found name-based match: "${matchingLocation.name}" - will update with warehouse code metafield`);
+          } else {
+            console.log(`   ❌ No name-based match found either`);
+          }
+        } else {
+          console.log(`   ✅ Found warehouse code match: "${matchingLocation.name}"`);
+        }
 
         let matchResult = {
           warehouseCode: warehouse.WarehouseCode,
@@ -138,9 +154,18 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
             : `gid://shopify/Location/${idString}`;
           
           locationData.id = locationId;
+          
+          // Check if this location needs warehouse code metafield added
+          const hasWarehouseCode = matchingLocation.metafields && matchingLocation.metafields['custom.warehouse_code'];
+          if (!hasWarehouseCode) {
+            console.log(`   📝 Location missing warehouse code metafield - will add it during update`);
+            locationData.needsWarehouseCodeMetafield = true;
+          }
+          
           results.toUpdate.push(locationData);
           matchResult.action = 'update';
           matchResult.existingLocationId = locationId;
+          matchResult.matchType = hasWarehouseCode ? 'warehouse_code' : 'name_fallback';
           
           // Log the differences for updates
           console.log(`   📝 Comparing current vs new data:`);

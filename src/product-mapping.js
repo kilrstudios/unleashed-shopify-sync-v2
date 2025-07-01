@@ -7,10 +7,34 @@ function generateVariantTitle(options) {
 
 function groupUnleashedProducts(products) {
   const groups = new Map();
+  let filteredCount = 0;
+  const filterReasons = {
+    isComponent: 0,
+    notSellable: 0,
+    both: 0
+  };
+  
+  console.log(`Processing ${products.length} Unleashed products...`);
   
   for (const product of products) {
     // Skip products that shouldn't be synced
-    if (product.IsComponent || !product.IsSellable) continue;
+    const isComponent = product.IsComponent;
+    const isNotSellable = !product.IsSellable;
+    
+    if (isComponent || isNotSellable) {
+      filteredCount++;
+      if (isComponent && isNotSellable) {
+        filterReasons.both++;
+        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Component & Not Sellable)`);
+      } else if (isComponent) {
+        filterReasons.isComponent++;
+        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Component)`);
+      } else if (isNotSellable) {
+        filterReasons.notSellable++;
+        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Not Sellable)`);
+      }
+      continue;
+    }
 
     const groupKey = product.AttributeSet?.ProductTitle || product.ProductDescription;
     if (!groups.has(groupKey)) {
@@ -18,6 +42,15 @@ function groupUnleashedProducts(products) {
     }
     groups.get(groupKey).push(product);
   }
+
+  console.log(`Product filtering summary:`);
+  console.log(`- Total products: ${products.length}`);
+  console.log(`- Filtered out: ${filteredCount}`);
+  console.log(`  - Components: ${filterReasons.isComponent}`);
+  console.log(`  - Not sellable: ${filterReasons.notSellable}`);
+  console.log(`  - Both: ${filterReasons.both}`);
+  console.log(`- Remaining for sync: ${products.length - filteredCount}`);
+  console.log(`- Product groups created: ${groups.size}`);
 
   return Array.from(groups.values());
 }

@@ -215,7 +215,25 @@ async function fetchShopifyCustomers(baseUrl, headers) {
     });
     const data = await response.json();
     if (data.errors) throw new Error(`Shopify Customers GraphQL errors: ${JSON.stringify(data.errors)}`);
-    const customers = data.data.customers.edges.map(edge => edge.node);
+    
+    // Transform customers to include metafields in accessible format (same as locations)
+    const customers = data.data.customers.edges.map(edge => {
+      const customer = edge.node;
+      const metafields = {};
+      
+      // Process metafields into a more accessible format
+      customer.metafields.edges.forEach(metafieldEdge => {
+        const metafield = metafieldEdge.node;
+        const key = `${metafield.namespace}.${metafield.key}`;
+        metafields[key] = metafield.value;
+      });
+
+      return {
+        ...customer,
+        metafields
+      };
+    });
+    
     allCustomers.push(...customers);
     hasNextPage = data.data.customers.pageInfo.hasNextPage;
     cursor = data.data.customers.pageInfo.endCursor;

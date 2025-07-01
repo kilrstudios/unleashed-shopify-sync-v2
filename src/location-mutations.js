@@ -23,7 +23,6 @@ const CREATE_LOCATION_MUTATION = `
           phone
         }
         fulfillsOnlineOrders
-        shipsInventory
       }
       userErrors {
         field
@@ -50,7 +49,6 @@ const UPDATE_LOCATION_MUTATION = `
           phone
         }
         fulfillsOnlineOrders
-        shipsInventory
       }
       userErrors {
         field
@@ -126,8 +124,7 @@ async function createLocationsBatch(baseUrl, headers, locationsToCreate) {
             zip: locationData.zip,
             phone: locationData.phone || ""
           },
-          fulfillsOnlineOrders: true,
-          shipsInventory: true
+          fulfillsOnlineOrders: true
         };
 
         // Add metafields if we have unleashed warehouse data
@@ -221,8 +218,7 @@ async function updateLocationsBatch(baseUrl, headers, locationsToUpdate) {
             zip: locationData.zip,
             phone: locationData.phone || ""
           },
-          fulfillsOnlineOrders: true,
-          shipsInventory: true
+          fulfillsOnlineOrders: true
         };
 
         // Add metafields if we have unleashed warehouse data
@@ -237,12 +233,17 @@ async function updateLocationsBatch(baseUrl, headers, locationsToUpdate) {
           ];
         }
 
+        // Add gid prefix if not present
+        const locationId = locationData.id.startsWith('gid://') 
+          ? locationData.id 
+          : `gid://shopify/Location/${locationData.id}`;
+
         const mutationResult = await executeMutation(
           baseUrl,
           headers,
           UPDATE_LOCATION_MUTATION,
           { 
-            id: locationData.id,
+            id: locationId,
             input: locationInput 
           }
         );

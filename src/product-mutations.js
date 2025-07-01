@@ -646,7 +646,7 @@ async function mutateProductsIndividually(baseUrl, headers, products, isUpdate =
 }
 
 // Queue-based product mutations (primary method)
-async function mutateProductsViaQueue(env, shopifyAuth, mappingResults) {
+async function mutateProductsViaQueue(env, shopifyAuth, mappingResults, originalDomain) {
   console.log('🚀 === STARTING QUEUE-BASED PRODUCT MUTATIONS ===');
   
   const { shopDomain } = shopifyAuth;
@@ -666,7 +666,8 @@ async function mutateProductsViaQueue(env, shopifyAuth, mappingResults) {
       const message = {
         type: 'CREATE_PRODUCT',
         syncId,
-        domain: shopDomain,
+        originalDomain,
+        shopDomain,
         productData: product,
         timestamp: new Date().toISOString()
       };
@@ -680,7 +681,8 @@ async function mutateProductsViaQueue(env, shopifyAuth, mappingResults) {
       const message = {
         type: 'UPDATE_PRODUCT', 
         syncId,
-        domain: shopDomain,
+        originalDomain,
+        shopDomain,
         productData: product,
         timestamp: new Date().toISOString()
       };
@@ -693,8 +695,9 @@ async function mutateProductsViaQueue(env, shopifyAuth, mappingResults) {
     for (const product of mappingResults.toArchive) {
       const message = {
         type: 'ARCHIVE_PRODUCT',
-        syncId, 
-        domain: shopDomain,
+        syncId,
+        originalDomain,
+        shopDomain,
         productData: product,
         timestamp: new Date().toISOString()
       };
@@ -778,7 +781,7 @@ async function mutateProductsDirect(shopifyAuth, mappingResults) {
 }
 
 // Main function: Decides between queue and direct methods
-async function mutateProducts(shopifyAuth, mappingResults, env = null) {
+async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null) {
   const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
   
   // Decide strategy based on availability and volume
@@ -786,7 +789,7 @@ async function mutateProducts(shopifyAuth, mappingResults, env = null) {
   
   if (useQueue) {
     console.log(`📋 Using queue-based mutations for ${totalOperations} operations`);
-    return await mutateProductsViaQueue(env, shopifyAuth, mappingResults);
+    return await mutateProductsViaQueue(env, shopifyAuth, mappingResults, originalDomain);
   } else {
     console.log(`🔄 Using direct mutations for ${totalOperations} operations`);
     return await mutateProductsDirect(shopifyAuth, mappingResults);
@@ -798,10 +801,12 @@ async function handleProductQueueMessage(message, env) {
   console.log(`🔄 Processing queue message: ${message.type} for ${message.productData.title}`);
   
   try {
-    // Get auth data for the domain
-    const authData = await getAuthData(env, message.domain);
+    // Get auth data using the original domain (where auth is stored in KV)
+    const authData = await getAuthData(env, message.originalDomain);
     const { accessToken } = authData.shopify;
-    const baseUrl = `https://${message.domain}/admin/api/2025-04`;
+    
+    // Use the Shopify domain for API calls
+    const baseUrl = `https://${message.shopDomain}/admin/api/2025-04`;
     const headers = {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': accessToken
@@ -926,14 +931,16 @@ async function handleProductQueueMessage(message, env) {
 async function handleInventoryUpdate(request, env) {
   try {
     const body = await request.json();
-    const { domain, productId, variants, inventoryLevels } = body;
+    const { originalDomain, shopDomain, productId, variants, inventoryLevels } = body;
 
     console.log(`📦 Handling inventory update for product ${productId}`);
 
-    // Get auth data
-    const authData = await getAuthData(env, domain);
+    // Get auth data using original domain
+    const authData = await getAuthData(env, originalDomain);
     const { accessToken } = authData.shopify;
-    const baseUrl = `https://${domain}/admin/api/2025-04`;
+    
+    // Use shopify domain for API calls
+    const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
     const headers = {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': accessToken
@@ -1009,14 +1016,16 @@ async function handleInventoryUpdate(request, env) {
 async function handleImageUpdate(request, env) {
   try {
     const body = await request.json();
-    const { domain, productId, variants, images } = body;
+    const { originalDomain, shopDomain, productId, variants, images } = body;
 
     console.log(`🖼️ Handling image update for product ${productId}`);
 
-    // Get auth data
-    const authData = await getAuthData(env, domain);
+    // Get auth data using original domain
+    const authData = await getAuthData(env, originalDomain);
     const { accessToken } = authData.shopify;
-    const baseUrl = `https://${domain}/admin/api/2025-04`;
+    
+    // Use shopify domain for API calls
+    const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
     const headers = {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': accessToken

@@ -252,7 +252,7 @@ export async function handleComprehensiveSync(request, env) {
         
         // Execute product mutations (using queue-based approach)
         console.log('🔄 Step 4b: Executing product mutations...');
-        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env);
+        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain);
 
         results.steps.productSync = {
           success: true,
@@ -265,28 +265,41 @@ export async function handleComprehensiveSync(request, env) {
             processed: productMappingResults.processed
           },
           mutations: {
-            bulkOperation: {
-              success: productMutationResults.bulkOperation?.success || false,
-              operationId: productMutationResults.bulkOperation?.operation?.id || null,
-              error: productMutationResults.bulkOperation?.error || null
-            },
-            created: {
-              successful: productMutationResults.created.successful.length,
-              failed: productMutationResults.created.failed.length
-            },
-            updated: {
-              successful: productMutationResults.updated.successful.length,
-              failed: productMutationResults.updated.failed.length
-            },
-            archived: {
-              successful: productMutationResults.archived.successful.length,
-              failed: productMutationResults.archived.failed.length
-            },
-            inventory: {
-              successful: productMutationResults.inventory.successful.length,
-              failed: productMutationResults.inventory.failed.length
-            },
-            summary: productMutationResults.summary
+            method: productMutationResults.method,
+            ...(productMutationResults.method === 'queue_based' ? {
+              // Queue-based response structure
+              syncId: productMutationResults.syncId,
+              queued: {
+                creates: productMutationResults.queued.creates,
+                updates: productMutationResults.queued.updates,
+                archives: productMutationResults.queued.archives
+              }
+            } : {
+              // Direct response structure
+              bulkOperation: {
+                success: productMutationResults.bulkOperation?.success || false,
+                operationId: productMutationResults.bulkOperation?.operation?.id || null,
+                error: productMutationResults.bulkOperation?.error || null
+              },
+              created: {
+                successful: productMutationResults.created?.successful?.length || 0,
+                failed: productMutationResults.created?.failed?.length || 0
+              },
+              updated: {
+                successful: productMutationResults.updated?.successful?.length || 0,
+                failed: productMutationResults.updated?.failed?.length || 0
+              },
+              archived: {
+                successful: productMutationResults.archived?.successful?.length || 0,
+                failed: productMutationResults.archived?.failed?.length || 0
+              },
+              inventory: {
+                successful: productMutationResults.inventory?.successful?.length || 0,
+                failed: productMutationResults.inventory?.failed?.length || 0
+              }
+            }),
+            summary: productMutationResults.summary,
+            errors: productMutationResults.errors || []
           }
         };
         
@@ -326,7 +339,12 @@ export async function handleComprehensiveSync(request, env) {
       }
       
       if (results.steps.productSync?.success) {
-        console.log(`📦 Products: Bulk operation ${results.steps.productSync.mutations.bulkOperation.success ? 'completed' : 'failed'}, ${results.steps.productSync.mutations.archived.successful} archived`);
+        const productMutations = results.steps.productSync.mutations;
+        if (productMutations.method === 'queue_based') {
+          console.log(`📦 Products: Queued ${productMutations.queued.creates} creates, ${productMutations.queued.updates} updates, ${productMutations.queued.archives} archives (${productMutations.syncId})`);
+        } else {
+          console.log(`📦 Products: ${productMutations.method} - ${productMutations.created?.successful || 0} created, ${productMutations.updated?.successful || 0} updated, ${productMutations.archived?.successful || 0} archived`);
+        }
       }
 
       return jsonResponse(results);

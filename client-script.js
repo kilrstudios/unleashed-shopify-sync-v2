@@ -211,17 +211,33 @@
     }
 
     // Initialize on DOM ready and watch for changes
-    if (t.readyState === 'loading') {
-        t.addEventListener("DOMContentLoaded", initializeButtons);
-    } else {
-        initializeButtons();
+    function init() {
+        if (t.readyState === 'loading') {
+            t.addEventListener("DOMContentLoaded", initializeButtons);
+        } else {
+            initializeButtons();
+        }
+
+        // Watch for DOM changes
+        new MutationObserver(initializeButtons).observe(t.body, {
+            childList: true,
+            subtree: true
+        });
     }
 
-    // Watch for DOM changes
-    new MutationObserver(initializeButtons).observe(t.body, {
-        childList: true,
-        subtree: true
-    });
+    // Ensure the environment is ready
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        init();
+    } else {
+        // If window/document not available yet (e.g. in Webstudio), wait for them
+        setTimeout(function checkEnvironment() {
+            if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+                init();
+            } else {
+                setTimeout(checkEnvironment, 50);
+            }
+        }, 50);
+    }
 
     // Export configuration function
     e.configureUnleashedSync = function(newConfig) {

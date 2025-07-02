@@ -22,6 +22,10 @@ function generateVariantTitle(attributeSet) {
 // Compare product data to determine if update is needed
 function compareProductData(unleashedProductData, shopifyProduct) {
   const differences = [];
+  const needsPostSync = {
+    inventory: false,
+    images: false
+  };
   
   // Compare basic product fields
   if (unleashedProductData.title !== shopifyProduct.title) {
@@ -71,6 +75,16 @@ function compareProductData(unleashedProductData, shopifyProduct) {
     if (unleashedTracked !== shopifyTracked) {
       differences.push(`variant ${sku} tracking: ${shopifyTracked} → ${unleashedTracked}`);
     }
+
+    // Check if inventory sync is needed (but don't include in differences)
+    if (unleashedVariant.inventory_management === 'shopify') {
+      needsPostSync.inventory = true;
+    }
+  }
+  
+  // Check if image sync is needed (but don't include in differences)
+  if (unleashedProductData.images && unleashedProductData.images.length > 0) {
+    needsPostSync.images = true;
   }
   
   // Check for removed variants in Shopify that don't exist in Unleashed
@@ -82,7 +96,8 @@ function compareProductData(unleashedProductData, shopifyProduct) {
   
   return {
     hasChanges: differences.length > 0,
-    differences: differences
+    differences: differences,
+    needsPostSync
   };
 }
 
@@ -304,20 +319,36 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             
             // Compare data to check if update is needed
             const differences = compareProductData(productData, matchingProduct);
-            if (differences.length > 0) {
+            if (differences.hasChanges) {
               console.log(`   🔄 Changes detected - will UPDATE product:`);
-              differences.forEach(diff => console.log(`      - ${diff}`));
+              differences.differences.forEach(diff => console.log(`      - ${diff}`));
               productData.id = matchingProduct.id;
               results.toUpdate.push(productData);
             } else {
-              console.log(`   ✅ Product is IDENTICAL to existing Shopify product - SKIPPING update`);
-              console.log(`   📊 No changes detected between Unleashed and Shopify data`);
-              results.skipped.push({
-                title: matchingProduct.title,
-                id: matchingProduct.id,
-                variantCount: matchingProduct.variants.length,
-                reason: 'identical_data'
-              });
+              console.log(`   ✅ Product is IDENTICAL to existing Shopify product`);
+              if (differences.needsPostSync.inventory || differences.needsPostSync.images) {
+                console.log(`   🔄 Post-sync operations needed:`);
+                if (differences.needsPostSync.inventory) console.log(`      - Inventory updates`);
+                if (differences.needsPostSync.images) console.log(`      - Image updates`);
+                productData.id = matchingProduct.id;
+                productData.needsPostSync = differences.needsPostSync;
+                results.skipped.push({
+                  title: matchingProduct.title,
+                  id: matchingProduct.id,
+                  variantCount: matchingProduct.variants.length,
+                  reason: 'identical_data',
+                  needsPostSync: differences.needsPostSync
+                });
+              } else {
+                console.log(`   📊 No changes or post-sync operations needed - SKIPPING`);
+                results.skipped.push({
+                  title: matchingProduct.title,
+                  id: matchingProduct.id,
+                  variantCount: matchingProduct.variants.length,
+                  reason: 'identical_data',
+                  needsPostSync: { inventory: false, images: false }
+                });
+              }
             }
           } else {
             console.log(`   ❌ SKU verification FAILED - will CREATE new product with modified handle`);

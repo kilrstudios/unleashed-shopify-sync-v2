@@ -162,9 +162,23 @@ export async function handleProductSync(request, env) {
 
     // Execute post-sync operations (inventory and images)
     console.log(`🔄 Step 4c: Executing post-sync operations...`);
+    
+    // Get all products that need post-sync operations (both updated and skipped)
+    const productsNeedingPostSync = [
+      ...mappingResults.toUpdate,
+      ...mappingResults.skipped.filter(p => p.needsPostSync?.inventory || p.needsPostSync?.images)
+    ];
+
+    // Get corresponding Unleashed products for post-sync operations
+    const unleashedProductsForPostSync = productsNeedingPostSync.map(shopifyProduct => {
+      return unleashedProducts.find(up => 
+        shopifyProduct.variants.some(v => v.sku === up.ProductCode)
+      );
+    }).filter(Boolean);
+
     const postSyncResults = await handlePostSyncOperations(
       shopifyClient,
-      unleashedProducts,
+      unleashedProductsForPostSync,
       shopifyProducts,
       shopifyLocations
     );

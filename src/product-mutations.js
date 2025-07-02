@@ -82,8 +82,11 @@ function buildProductSetInput(productData, isUpdate = false) {
           .map(mf => ({
             namespace: mf.namespace,
             key: mf.key,
-            value: mf.value.toString(),
-            type: 'money'  // Using money type - user will update Shopify metafield definitions
+            value: JSON.stringify({
+              amount: mf.value.toString(),
+              currency_code: "AUD"  // Default to AUD - should be shop's currency
+            }),
+            type: 'money'
           }));
       }
 

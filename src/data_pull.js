@@ -229,7 +229,7 @@ async function fetchShopifyData(authData) {
   // Fetch products with variants and inventory
   const productsQuery = `
     query getProducts {
-      products(first: 50) {
+      products(first: 20) {
         edges {
           node {
             id
@@ -245,7 +245,7 @@ async function fetchShopifyData(authData) {
               position
               values
             }
-            variants(first: 50) {
+            variants(first: 20) {
               edges {
                 node {
                   id
@@ -255,7 +255,7 @@ async function fetchShopifyData(authData) {
                   inventoryItem {
                     id
                     tracked
-                    inventoryLevels(first: 50) {
+                    inventoryLevels(first: 20) {
                       edges {
                         node {
                           id
@@ -267,17 +267,6 @@ async function fetchShopifyData(authData) {
                             quantity
                           }
                         }
-                      }
-                    }
-                  }
-                  metafields(first: 20) {
-                    edges {
-                      node {
-                        id
-                        namespace
-                        key
-                        value
-                        type
                       }
                     }
                   }
@@ -307,8 +296,7 @@ async function fetchShopifyData(authData) {
         id: edge.node.id,
         sku: edge.node.sku,
         price: edge.node.price,
-        inventoryItem: edge.node.inventoryItem,
-        metafields: edge.node.metafields.edges.map(mf => mf.node)
+        inventoryItem: edge.node.inventoryItem
       }))
     }, null, 2));
   }

@@ -515,34 +515,16 @@ async function pullAllData(domain, env) {
     fetchShopifyData(authData.shopify)
   ]);
 
-  // DEBUG: Log raw data structures for inspection (truncate arrays for readability)
+  // DEBUG: Log full Unleashed raw data for inspection (may be large)
   try {
-    const rawDataDebug = {
-      unleashed: {
-        warehouses: unleashedData.warehouses?.slice(0, 5) || [],
-        warehousesCount: unleashedData.warehouses?.length || 0,
-        products: unleashedData.products?.slice(0, 5) || [],
-        productsCount: unleashedData.products?.length || 0,
-        customers: unleashedData.customers?.slice(0, 5) || [],
-        customersCount: unleashedData.customers?.length || 0,
-        contacts: unleashedData.contacts?.slice(0, 5) || [],
-        contactsCount: unleashedData.contacts?.length || 0
-      },
-      shopify: {
-        locations: shopifyData.locations?.slice(0, 5) || [],
-        locationsCount: shopifyData.locations?.length || 0,
-        products: shopifyData.products?.slice(0, 5) || [],
-        productsCount: shopifyData.products?.length || 0,
-        customers: shopifyData.customers?.slice(0, 5) || [],
-        customersCount: shopifyData.customers?.length || 0
-      }
-    };
-
-    console.log('📝 RAW DATA DEBUG (showing up to 5 items per collection):');
-    console.log(JSON.stringify(rawDataDebug, null, 2));
+    console.log('📝 RAW UNLEASHED DATA START =================================');
+    console.log(JSON.stringify(unleashedData, null, 2));
+    console.log('📝 RAW UNLEASHED DATA END ===================================');
   } catch (logError) {
-    console.warn('⚠️ Failed to log raw data debug:', logError.message);
+    console.warn('⚠️ Failed to log full Unleashed data:', logError.message);
   }
+
+  // (Optional) Still log small Shopify sample to compare if needed
 
   return {
     unleashed: unleashedData,

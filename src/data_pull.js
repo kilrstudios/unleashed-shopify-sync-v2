@@ -57,8 +57,13 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
     queryString
   });
   
-  // The signature should be generated from the entire request path
-  const signatureInput = queryString ? `${path}?${queryString}` : path;
+  // The signature should be generated from the URL-encoded path and query string
+  const signatureInput = queryString 
+    ? `${path}?${queryString.split('&').map(param => {
+        const [key, value] = param.split('=');
+        return `${encodeURIComponent(key)}=${encodeURIComponent(value || '')}`;
+      }).join('&')}`
+    : path;
   console.log('  🔐 Generating signature with input:', signatureInput);
   const signature = await generateSignature(signatureInput, apiKey);
   console.log('  🔑 Generated signature:', signature);

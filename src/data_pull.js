@@ -7,7 +7,19 @@ async function getAuthData(kvStore, domain) {
     if (!authString) {
       throw new Error(`No authentication data found for domain: ${domain}`);
     }
-    return JSON.parse(authString);
+    const authData = JSON.parse(authString);
+    
+    // Trim any whitespace from the auth credentials
+    if (authData.unleashed) {
+      authData.unleashed.apiKey = authData.unleashed.apiKey?.trim();
+      authData.unleashed.apiId = authData.unleashed.apiId?.trim();
+    }
+    if (authData.shopify) {
+      authData.shopify.accessToken = authData.shopify.accessToken?.trim();
+      authData.shopify.shopDomain = authData.shopify.shopDomain?.trim();
+    }
+    
+    return authData;
   } catch (error) {
     console.error('Error getting auth data:', error);
     throw new Error(`Failed to get authentication data: ${error.message}`);
@@ -42,8 +54,8 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
     queryString
   });
   
-  // According to Unleashed docs, the signature should be METHOD&PATH[?QUERY]
-  const signatureInput = queryString ? `GET&${path}?${queryString}` : `GET&${path}`;
+  // According to Unleashed docs, the signature should be METHOD&PATH without query string
+  const signatureInput = `GET&${path}`;
   console.log('  🔐 Generating signature with input:', signatureInput);
   const signature = await generateSignature(signatureInput, apiKey);
   console.log('  🔑 Generated signature:', signature);

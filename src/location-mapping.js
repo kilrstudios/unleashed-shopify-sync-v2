@@ -78,15 +78,18 @@ function compareLocationData(unleashedData, shopifyLocation) {
   }
   
   // Check warehouse code metafield
-  const hasWarehouseCode = shopifyLocation.metafields && shopifyLocation.metafields['custom.warehouse_code'] === unleashedData.warehouseCode;
-  if (!hasWarehouseCode) {
-    differences.push(`warehouseCode: "${shopifyLocation.metafields?.['custom.warehouse_code'] || 'None'}" → "${unleashedData.warehouseCode}"`);
+  const existingWarehouseCode = shopifyLocation.metafields?.['custom.warehouse_code'];
+  const hasWarehouseCode = existingWarehouseCode === unleashedData.warehouseCode;
+  
+  // Only add to differences if the warehouse code exists and is different, or doesn't exist at all
+  if (!hasWarehouseCode && (existingWarehouseCode !== undefined || unleashedData.warehouseCode !== undefined)) {
+    differences.push(`warehouseCode: "${existingWarehouseCode}" → "${unleashedData.warehouseCode}"`);
   }
   
   return {
     hasChanges: differences.length > 0,
     differences: differences,
-    needsWarehouseCodeMetafield: !hasWarehouseCode
+    needsWarehouseCodeMetafield: !hasWarehouseCode && unleashedData.warehouseCode !== undefined
   };
 }
 

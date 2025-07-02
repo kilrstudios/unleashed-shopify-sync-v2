@@ -211,8 +211,9 @@ function compareCustomerData(unleashedData, shopifyCustomer) {
   const shopifyMetafields = shopifyCustomer.metafields || {};
   for (const metafield of unleashedData.metafields) {
     const currentValue = shopifyMetafields[`${metafield.namespace}.${metafield.key}`];
-    if (currentValue !== metafield.value) {
-      differences.push(`${metafield.namespace}.${metafield.key}: "${currentValue || 'None'}" → "${metafield.value}"`);
+    // Only add to differences if the metafield exists and is different, or doesn't exist at all
+    if (currentValue !== metafield.value && (currentValue !== undefined || metafield.value !== undefined)) {
+      differences.push(`${metafield.namespace}.${metafield.key}: "${currentValue}" → "${metafield.value}"`);
     }
   }
   

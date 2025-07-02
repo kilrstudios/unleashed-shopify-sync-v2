@@ -57,7 +57,7 @@ async function fetchUnleashedData(authData) {
   let hasMorePages = true;
   
   while (hasMorePages) {
-    const productsUrl = `https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=${currentPage}`;
+    const productsUrl = `https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=${currentPage}&includeAttributeSet=true&includeAttributes=true`;
     console.log(`📄 Fetching page ${currentPage}...`);
     
     const productsResponse = await fetch(productsUrl, {

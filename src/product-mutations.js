@@ -42,11 +42,8 @@ function buildProductSetInput(productData, isUpdate = false) {
     tags: productData.tags || [],
     variants: productData.variants.map(variant => {
       const variantInput = {
-        title: variant.title || 'Default Title',
         sku: variant.sku,
         price: variant.price?.toString(),
-        weight: variant.weight,
-        weightUnit: 'GRAMS',
         inventoryItem: {
           sku: variant.sku,
           tracked: variant.inventory_management === 'shopify',
@@ -57,7 +54,7 @@ function buildProductSetInput(productData, isUpdate = false) {
             }
           }
         },
-        inventoryPolicy: variant.inventory_policy || 'DENY'
+        inventoryPolicy: 'DENY' // Must be uppercase
       };
 
       // Add variant ID if updating
@@ -77,10 +74,18 @@ function buildProductSetInput(productData, isUpdate = false) {
           }));
       }
 
-      // Handle variant options
-      if (variant.option1) variantInput.option1 = variant.option1;
-      if (variant.option2) variantInput.option2 = variant.option2;
-      if (variant.option3) variantInput.option3 = variant.option3;
+      // Handle variant options using optionValues array
+      const optionValues = [];
+      if (variant.option1) optionValues.push({ optionName: 'Title', name: variant.option1 });
+      if (variant.option2) optionValues.push({ optionName: 'Size', name: variant.option2 });
+      if (variant.option3) optionValues.push({ optionName: 'Color', name: variant.option3 });
+      
+      // If no specific options, use default
+      if (optionValues.length === 0) {
+        optionValues.push({ optionName: 'Title', name: 'Default Title' });
+      }
+      
+      variantInput.optionValues = optionValues;
 
       return variantInput;
     })
@@ -96,9 +101,19 @@ function buildProductSetInput(productData, isUpdate = false) {
     input.descriptionHtml = productData.description;
   }
 
-  // Handle product options for multi-variant products
-  if (productData.options && productData.options.length > 0) {
-    input.options = productData.options.map(option => option.name);
+  // Handle product options - for single variant products with default option
+  if (!productData.options || productData.options.length === 0) {
+    // Single variant products need at least one option
+    input.productOptions = [{
+      name: 'Title',
+      values: [{ name: 'Default Title' }]
+    }];
+  } else {
+    // Multi-variant products
+    input.productOptions = productData.options.map(option => ({
+      name: option.name || option,
+      values: option.values ? option.values.map(v => ({ name: v })) : [{ name: 'Default' }]
+    }));
   }
 
   return { input };

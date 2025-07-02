@@ -283,13 +283,23 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             const inventoryQuantities = [];
             if (product.StockOnHand && product.StockOnHand.length > 0) {
               product.StockOnHand.forEach(stock => {
-                if (stock.QtyOnHand !== undefined) {
-                  inventoryQuantities.push({
-                    locationId: `gid://shopify/Location/${stock.WarehouseCode}`,
-                    name: "available",
-                    quantity: parseInt(stock.QtyOnHand) || 0
-                  });
-                }
+                const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
+                if (!warehouseCode) return; // skip if no code
+
+                // Prefer QuantityAvailable, then fallbacks
+                const qty = parseInt(
+                  stock.QuantityAvailable ??
+                  stock.AvailableQty ??
+                  stock.QuantityOnHand ??
+                  stock.QtyOnHand ??
+                  0
+                );
+
+                inventoryQuantities.push({
+                  locationId: `gid://shopify/Location/${warehouseCode}`,
+                  name: "available",
+                  quantity: isNaN(qty) ? 0 : qty
+                });
               });
             }
             
@@ -302,6 +312,7 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
               compare_at_price: null,
               weight: product.Weight || 0,
               weight_unit: 'KILOGRAMS',
+              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
               inventoryItem: {
                 tracked: (!product.NeverDiminishing && product.IsSellable),
                 measurement: {

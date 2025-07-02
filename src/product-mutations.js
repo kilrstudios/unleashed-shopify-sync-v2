@@ -42,6 +42,11 @@ function generateVariantTitle(attributeSet) {
 
 // Build productSet input for bulk operation
 function buildProductSetInput(productData, isUpdate = false) {
+  // Determine if this is a single-variant product with default options only
+  const isSingleVariantDefault = !productData.options || 
+    productData.options.length === 0 || 
+    (productData.options.length === 1 && productData.options[0].name === 'Title');
+  
   const input = {
     title: productData.title,
     status: productData.status || 'ACTIVE',
@@ -82,9 +87,18 @@ function buildProductSetInput(productData, isUpdate = false) {
           }));
       }
 
-      // For now, don't set optionValues - let Shopify auto-generate
-      // This will be auto-populated based on the productOptions
-      // variantInput.optionValues = will be set automatically
+      // Only add optionValues for multi-variant products with actual option values
+      if (!isSingleVariantDefault) {
+        const optionValues = [];
+        if (variant.option1) optionValues.push({ optionName: productData.options[0]?.name || 'Option1', name: variant.option1 });
+        if (variant.option2) optionValues.push({ optionName: productData.options[1]?.name || 'Option2', name: variant.option2 });
+        if (variant.option3) optionValues.push({ optionName: productData.options[2]?.name || 'Option3', name: variant.option3 });
+        
+        if (optionValues.length > 0) {
+          variantInput.optionValues = optionValues;
+        }
+      }
+      // For single-variant default products, don't include optionValues at all
 
       return variantInput;
     })
@@ -100,18 +114,37 @@ function buildProductSetInput(productData, isUpdate = false) {
     input.descriptionHtml = productData.description;
   }
 
-  // Handle product options - for single variant products with default option
-  if (!productData.options || productData.options.length === 0) {
+  // Handle product options
+  if (isSingleVariantDefault) {
     // Single variant products need at least one option
     input.productOptions = [{
       name: 'Title',
       values: [{ name: 'Default Title' }]
     }];
   } else {
-    // Multi-variant products
-    input.productOptions = productData.options.map(option => ({
+    // Multi-variant products - collect all unique option values from variants
+    const optionValuesMap = new Map();
+    
+    productData.variants.forEach(variant => {
+      if (variant.option1) {
+        if (!optionValuesMap.has(0)) optionValuesMap.set(0, new Set());
+        optionValuesMap.get(0).add(variant.option1);
+      }
+      if (variant.option2) {
+        if (!optionValuesMap.has(1)) optionValuesMap.set(1, new Set());
+        optionValuesMap.get(1).add(variant.option2);
+      }
+      if (variant.option3) {
+        if (!optionValuesMap.has(2)) optionValuesMap.set(2, new Set());
+        optionValuesMap.get(2).add(variant.option3);
+      }
+    });
+
+    input.productOptions = productData.options.map((option, index) => ({
       name: option.name || option,
-      values: option.values ? option.values.map(v => ({ name: v })) : [{ name: 'Default' }]
+      values: optionValuesMap.has(index) 
+        ? Array.from(optionValuesMap.get(index)).map(value => ({ name: value }))
+        : [{ name: 'Default' }]
     }));
   }
 

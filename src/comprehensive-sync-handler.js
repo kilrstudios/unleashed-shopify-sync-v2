@@ -119,6 +119,30 @@ export async function handleComprehensiveSync(request, env) {
     try {
       const data = await pullAllData(domain, env);
       
+      // ========================= DEBUG LOGGING =========================
+      // Log a concise snapshot of the raw data pulled from Unleashed and Shopify
+      // to help diagnose mapping issues – we limit to a few records to
+      // avoid overwhelming the console while still providing visibility.
+      try {
+        const debugSnapshot = {
+          unleashed: {
+            warehouses: data.unleashed.warehouses.slice(0, 3),     // first 3 warehouses
+            customers: data.unleashed.customers.slice(0, 3),       // first 3 customers
+            products: data.unleashed.products.slice(0, 3)          // first 3 products (includes StockOnHand)
+          },
+          shopify: {
+            locations: data.shopify.locations.slice(0, 3),         // first 3 locations
+            customers: data.shopify.customers.slice(0, 3),         // first 3 customers
+            products: data.shopify.products.slice(0, 3)            // first 3 products
+          }
+        };
+        console.log('🔍 RAW DATA SNAPSHOT (truncated):', JSON.stringify(debugSnapshot, null, 2));
+      } catch (dbgErr) {
+        // Defensive: never crash the workflow due to debug logging issues
+        console.warn('⚠️ Debug logging failed:', dbgErr.message);
+      }
+      // =================================================================
+      
       results.steps.dataFetch = {
         success: true,
         duration: `${((Date.now() - stepStart) / 1000).toFixed(2)}s`,

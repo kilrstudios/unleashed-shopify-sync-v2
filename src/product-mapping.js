@@ -279,23 +279,17 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           variants: group.map(product => {
             const variantOptions = extractVariantOptions(product.AttributeSet);
             
-            // Calculate total stock on hand for each location
+            // Calculate inventory quantities for each location
             const inventoryQuantities = [];
             if (product.StockOnHand && product.StockOnHand.length > 0) {
-              // Group stock by warehouse and sum quantities
-              const stockByWarehouse = product.StockOnHand.reduce((acc, stock) => {
-                const warehouseCode = stock.WarehouseCode || 'Unknown';
-                acc[warehouseCode] = (acc[warehouseCode] || 0) + parseInt(stock.QtyOnHand || 0);
-                return acc;
-              }, {});
-              
-              // Convert to inventoryQuantities format for productSet mutation
-              Object.entries(stockByWarehouse).forEach(([warehouseCode, quantity]) => {
-                inventoryQuantities.push({
-                  name: "available",
-                  quantity: quantity,
-                  locationId: `gid://shopify/Location/${warehouseCode}`
-                });
+              product.StockOnHand.forEach(stock => {
+                if (stock.QtyOnHand !== undefined) {
+                  inventoryQuantities.push({
+                    locationId: `gid://shopify/Location/${stock.WarehouseCode}`,
+                    name: "available",
+                    quantity: parseInt(stock.QtyOnHand) || 0
+                  });
+                }
               });
             }
             
@@ -307,17 +301,28 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
               price: product.DefaultSellPrice,
               compare_at_price: null,
               weight: product.Weight || 0,
-              weight_unit: 'g',
-              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-              inventory_policy: 'deny',
+              weight_unit: 'KILOGRAMS',
+              inventoryItem: {
+                tracked: (!product.NeverDiminishing && product.IsSellable),
+                measurement: {
+                  weight: {
+                    value: parseFloat(product.Weight) || 0,
+                    unit: 'KILOGRAMS'
+                  }
+                }
+              },
+              inventoryQuantities: inventoryQuantities,
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,
-              inventoryQuantities: inventoryQuantities,
               metafields: Array.from({ length: 10 }, (_, i) => ({
                 namespace: 'custom',
                 key: `price_tier_${i + 1}`,
-                value: product[`SellPriceTier${i + 1}`]?.Value || ''
+                value: JSON.stringify({
+                  amount: product[`SellPriceTier${i + 1}`]?.Value || '0',
+                  currency_code: "AUD"
+                }),
+                type: 'money'
               }))
             };
           })

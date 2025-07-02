@@ -73,9 +73,27 @@ function groupUnleashedProducts(products) {
       continue;
     }
 
+    // Debug: Log AttributeSet data for grouping analysis
+    console.log(`\n🔍 GROUPING DEBUG for "${product.ProductCode}" - "${product.ProductDescription}"`);
+    console.log(`   AttributeSet exists: ${!!product.AttributeSet}`);
+    if (product.AttributeSet) {
+      console.log(`   ProductTitle: "${product.AttributeSet.ProductTitle}"`);
+      console.log(`   Option 1 Value: "${product.AttributeSet['Option 1 Value']}"`);
+      console.log(`   Option 2 Value: "${product.AttributeSet['Option 2 Value']}"`);
+      console.log(`   Option 3 Value: "${product.AttributeSet['Option 3 Value']}"`);
+      console.log(`   Option Names: "${product.AttributeSet['Option Names']}"`);
+    } else {
+      console.log(`   No AttributeSet - will use ProductDescription as groupKey`);
+    }
+
     const groupKey = product.AttributeSet?.ProductTitle || product.ProductDescription;
+    console.log(`   🎯 Final groupKey: "${groupKey}"`);
+    
     if (!groups.has(groupKey)) {
+      console.log(`   🆕 Creating new group: "${groupKey}"`);
       groups.set(groupKey, []);
+    } else {
+      console.log(`   📝 Adding to existing group: "${groupKey}"`);
     }
     groups.get(groupKey).push(product);
   }

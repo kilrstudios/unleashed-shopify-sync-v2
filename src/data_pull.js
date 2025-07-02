@@ -57,6 +57,22 @@ async function fetchUnleashedData(authData) {
   });
   const productsData = await productsResponse.json();
   results.products = productsData.Items || [];
+  
+  // Debug: Log sample product structure to understand what data we're getting
+  if (results.products.length > 0) {
+    console.log(`\n📊 UNLEASHED DATA DEBUG - Sample product structure:`);
+    const sampleProduct = results.products[0];
+    console.log(`   ProductCode: ${sampleProduct.ProductCode}`);
+    console.log(`   ProductDescription: ${sampleProduct.ProductDescription}`);
+    console.log(`   AttributeSet exists: ${!!sampleProduct.AttributeSet}`);
+    if (sampleProduct.AttributeSet) {
+      console.log(`   AttributeSet keys:`, Object.keys(sampleProduct.AttributeSet));
+      console.log(`   Full AttributeSet:`, JSON.stringify(sampleProduct.AttributeSet, null, 2));
+    } else {
+      console.log(`   ❌ No AttributeSet data - this explains why products aren't grouping!`);
+    }
+    console.log(`   Available product fields:`, Object.keys(sampleProduct));
+  }
 
   // Customers (company entities)
   const customersUrl = 'https://api.unleashedsoftware.com/Customers?pageSize=200&pageNumber=1';
@@ -193,7 +209,26 @@ async function fetchShopifyProducts(baseUrl, headers) {
     });
     const data = await response.json();
     if (data.errors) throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
-    const products = data.data.products.edges.map(edge => edge.node);
+    
+    // Transform products and flatten variant data structure
+    const products = data.data.products.edges.map(edge => {
+      const product = edge.node;
+      
+      // Transform variants from GraphQL edges/node structure to flat array
+      product.variants = product.variants.edges.map(variantEdge => {
+        const variant = variantEdge.node;
+        
+        // Transform metafields from edges/node structure to flat array
+        if (variant.metafields && variant.metafields.edges) {
+          variant.metafields = variant.metafields.edges.map(mfEdge => mfEdge.node);
+        }
+        
+        return variant;
+      });
+      
+      return product;
+    });
+    
     allProducts.push(...products);
     hasNextPage = data.data.products.pageInfo.hasNextPage;
     cursor = data.data.products.pageInfo.endCursor;

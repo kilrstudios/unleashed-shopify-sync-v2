@@ -167,6 +167,33 @@ async function fetchUnleashedData(authData) {
   return allProducts;
 }
 
+// Helper: Perform GraphQL requests to Shopify
+async function graphqlRequest(shopifyAuth, query, variables = {}) {
+  if (!shopifyAuth || !shopifyAuth.accessToken || !shopifyAuth.shopDomain) {
+    throw new Error('graphqlRequest: Invalid Shopify auth object');
+  }
+
+  const baseUrl = `https://${shopifyAuth.shopDomain}/admin/api/2025-04/graphql.json`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': shopifyAuth.accessToken
+  };
+
+  const response = await fetch(baseUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables })
+  });
+
+  const data = await response.json();
+
+  if (data.errors) {
+    throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
+  }
+
+  return data.data;
+}
+
 // Fetch Shopify data
 async function fetchShopifyData(authData) {
   console.log('\n📊 === SHOPIFY DATA PULL DETAILS ===');

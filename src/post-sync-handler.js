@@ -155,7 +155,7 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
         try {
           // Find warehouse code in location metafields
           const warehouseCode = location.metafields?.edges?.find(edge => 
-            (edge.node.namespace === 'custom' || edge.node.namespace === 'unleashed') && 
+            edge.node.namespace === 'custom' && 
             edge.node.key === 'warehouse_code'
           )?.node?.value;
 

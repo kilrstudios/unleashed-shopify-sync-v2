@@ -90,55 +90,45 @@ async function fetchStockOnHand(productCode, authData) {
 
 // Fetch Unleashed data
 async function fetchUnleashedData(authData) {
-  const results = {};
-  
-  // Products - Fetch ALL products with AttributeSet data using proper endpoint
-  console.log(`\n🔍 FETCHING ALL PRODUCTS WITH ATTRIBUTESET DATA...`);
-  
   const allProducts = [];
-  let currentPage = 1;
   let hasMorePages = true;
-  
+  let currentPage = 1;
+  const pageSize = 100;
+
+  console.log('\n📊 === UNLEASHED DATA PULL DETAILS ===');
+
   while (hasMorePages) {
-    const productsUrl = `https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=${currentPage}&includeAttributeSet=true&includeAttributes=true`;
-    console.log(`📄 Fetching page ${currentPage}...`);
+    console.log(`\n📄 Fetching page ${currentPage}...`);
     
-    const productsResponse = await fetch(productsUrl, {
+    const productsUrl = `https://api.unleashedsoftware.com/Products?pageSize=${pageSize}&pageNumber=${currentPage}`;
+    const response = await fetch(productsUrl, {
       method: 'GET',
       headers: await createUnleashedHeaders(productsUrl, authData.apiKey, authData.apiId)
     });
-    
-    if (!productsResponse.ok) {
-      throw new Error(`Failed to fetch products page ${currentPage}: ${productsResponse.status} ${productsResponse.statusText}`);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch products: ${response.status} ${response.statusText}`);
     }
-    
-    const productsData = await productsResponse.json();
-    const products = productsData.Items || [];
-    
-    if (products.length === 0) {
-      hasMorePages = false;
-      break;
-    }
+
+    const data = await response.json();
+    const products = data.Items || [];
     
     // Debug first product's data structure on first page
     if (currentPage === 1 && products.length > 0) {
-      console.log(`\n📊 PRODUCT DATA STRUCTURE DEBUG - Sample from bulk endpoint:`)
-      console.log(`   ProductCode: ${products[0].ProductCode}`);
-      console.log(`   ProductDescription: ${products[0].ProductDescription}`);
-      console.log(`   AttributeSet exists: ${!!products[0].AttributeSet}`);
-      console.log(`   Attributes exists: ${!!products[0].Attributes}`);
-      
-      if (products[0].AttributeSet) {
-        console.log(`   AttributeSet:`, typeof products[0].AttributeSet === 'string' ? products[0].AttributeSet : JSON.stringify(products[0].AttributeSet, null, 2));
-      }
-      
-      if (products[0].Attributes) {
-        console.log(`   Attributes:`, JSON.stringify(products[0].Attributes, null, 2));
-      }
-      
-      if (!products[0].AttributeSet && !products[0].Attributes) {
-        console.log(`   Available fields:`, Object.keys(products[0]));
-      }
+      const sampleProduct = products[0];
+      console.log(`\n🔍 UNLEASHED PRODUCT DATA STRUCTURE (First Product):`)
+      console.log(JSON.stringify({
+        ProductCode: sampleProduct.ProductCode,
+        ProductDescription: sampleProduct.ProductDescription,
+        DefaultSellPrice: sampleProduct.DefaultSellPrice,
+        Weight: sampleProduct.Weight,
+        NeverDiminishing: sampleProduct.NeverDiminishing,
+        IsSellable: sampleProduct.IsSellable,
+        AttributeSet: sampleProduct.AttributeSet,
+        ProductGroup: sampleProduct.ProductGroup,
+        ProductBrand: sampleProduct.ProductBrand,
+        Obsolete: sampleProduct.Obsolete
+      }, null, 2));
     }
     
     // For each product, fetch stock on hand and attachments
@@ -146,9 +136,15 @@ async function fetchUnleashedData(authData) {
     for (const product of products) {
       try {
         // Fetch stock on hand
-        console.log(`   🏢 Fetching stock for ${product.ProductCode}...`);
+        console.log(`\n🏢 Stock data for ${product.ProductCode}:`);
         const stockData = await fetchStockOnHand(product.ProductCode, authData);
         product.StockOnHand = stockData;
+
+        // Log detailed stock structure for the first product
+        if (currentPage === 1 && products.indexOf(product) === 0 && stockData.length > 0) {
+          console.log(`\n📊 STOCK ON HAND DATA STRUCTURE:`);
+          console.log(JSON.stringify(stockData[0], null, 2));
+        }
         
         // Note: Product attachments endpoint not available in Unleashed API
         // Keeping empty array for compatibility
@@ -163,263 +159,21 @@ async function fetchUnleashedData(authData) {
     
     allProducts.push(...products);
     
-    // Check if we have more pages
-    if (productsData.Pagination) {
-      const totalPages = productsData.Pagination.NumberOfPages || 1;
-      hasMorePages = currentPage < totalPages;
-      console.log(`📊 Page ${currentPage}/${totalPages} - Found ${products.length} products (Total so far: ${allProducts.length})`);
-    } else {
-      // If no pagination info, assume we got all products
-      hasMorePages = false;
-    }
-    
+    // Check if there are more pages
+    hasMorePages = products.length === pageSize;
     currentPage++;
-    
-    // Add small delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  
-  console.log(`✅ Retrieved ${allProducts.length} total products with AttributeSet data`);
-  results.products = allProducts;
-
-  // Customers (company entities)
-  const customersUrl = 'https://api.unleashedsoftware.com/Customers?pageSize=200&pageNumber=1';
-  const customersResponse = await fetch(customersUrl, {
-    method: 'GET',
-    headers: await createUnleashedHeaders(customersUrl, authData.apiKey, authData.apiId)
-  });
-  const customersData = await customersResponse.json();
-  results.customers = customersData.Items || [];
-
-  // Contacts (individuals who should become Shopify customers)
-  // Fetch contacts for each customer
-  results.contacts = [];
-  for (const customer of results.customers) {
-    try {
-      const contactsUrl = `https://api.unleashedsoftware.com/Customers/${customer.Guid}/Contacts`;
-      const contactsResponse = await fetch(contactsUrl, {
-        method: 'GET',
-        headers: await createUnleashedHeaders(contactsUrl, authData.apiKey, authData.apiId)
-      });
-      const contactsData = await contactsResponse.json();
-      const customerContacts = contactsData.Items || [];
-      
-      // Add customer reference to each contact for easy lookup
-      customerContacts.forEach(contact => {
-        contact.CustomerGuid = customer.Guid;
-        contact.CustomerCode = customer.CustomerCode;
-        contact.CustomerName = customer.CustomerName;
-      });
-      
-      results.contacts.push(...customerContacts);
-    } catch (error) {
-      console.warn(`Failed to fetch contacts for customer ${customer.CustomerCode}:`, error.message);
-    }
   }
 
-  // Warehouses
-  const warehousesUrl = 'https://api.unleashedsoftware.com/Warehouses';
-  const warehousesResponse = await fetch(warehousesUrl, {
-    method: 'GET',
-    headers: await createUnleashedHeaders(warehousesUrl, authData.apiKey, authData.apiId)
-  });
-  const warehousesData = await warehousesResponse.json();
-  results.warehouses = warehousesData.Items || [];
-
-  return results;
-}
-
-// Fetch Shopify data
-async function fetchShopifyProducts(baseUrl, headers) {
-  const allProducts = [];
-  let hasNextPage = true;
-  let cursor = null;
-  const query = `
-    query GetProducts($first: Int!, $after: String) {
-      products(first: $first, after: $after) {
-        edges {
-          node {
-            id
-            handle
-            title
-            tracksInventory
-            totalInventory
-            featuredImage {
-              id
-              url
-              altText
-              width
-              height
-            }
-            variants(first: 20) {
-              edges {
-                node {
-                  inventoryItem {
-                    tracked
-                    inventoryLevels(first: 5) {
-                      nodes {
-                        quantities(names: "available") {
-                          quantity
-                        }
-                        location {
-                          name
-                        }
-                      }
-                    }
-                    sku
-                  }
-                  displayName
-                  id
-                  image {
-                    id
-                    url
-                    altText
-                    width
-                    height
-                  }
-                  price
-                  metafields(first: 3, keys: ["custom.price_tier_1", "custom.price_tier_2", "custom.price_tier_3"]) {
-                    edges {
-                      node {
-                        key
-                        value
-                      }
-                    }
-                  }
-                  title
-                  sku
-                }
-              }
-            }
-            description
-            productType
-            vendor
-            status
-            options {
-              name
-              values
-            }
-          }
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  `;
-  while (hasNextPage) {
-    const variables = { first: 25, after: cursor };
-    const response = await fetch(`${baseUrl}/graphql.json`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ query, variables })
-    });
-    const data = await response.json();
-    if (data.errors) throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
-    
-    // Transform products and flatten variant data structure
-    const products = data.data.products.edges.map(edge => {
-      const product = edge.node;
-      
-      // Transform variants from GraphQL edges/node structure to flat array
-      product.variants = product.variants.edges.map(variantEdge => {
-        const variant = variantEdge.node;
-        
-        // Transform metafields from edges/node structure to flat array
-        if (variant.metafields && variant.metafields.edges) {
-          variant.metafields = variant.metafields.edges.map(mfEdge => mfEdge.node);
-        }
-        
-        return variant;
-      });
-      
-      return product;
-    });
-    
-    allProducts.push(...products);
-    hasNextPage = data.data.products.pageInfo.hasNextPage;
-    cursor = data.data.products.pageInfo.endCursor;
-  }
   return allProducts;
 }
 
-async function fetchShopifyCustomers(baseUrl, headers) {
-  const allCustomers = [];
-  let hasNextPage = true;
-  let cursor = null;
-  const query = `
-    query GetCustomers($first: Int!, $after: String) {
-      customers(first: $first, after: $after) {
-        edges {
-          node {
-            id
-            firstName
-            lastName
-            email
-            phone
-            metafields(
-              keys: ["unleashed.contact_guid", "unleashed.customer_code", "unleashed.customer_name", "unleashed.sell_price_tier"]
-              first: 10
-            ) {
-              edges {
-                node {
-                  id
-                  key
-                  value
-                  namespace
-                }
-              }
-            }
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  `;
-  while (hasNextPage) {
-    const variables = { first: 25, after: cursor };
-    const response = await fetch(`${baseUrl}/graphql.json`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ query, variables })
-    });
-    const data = await response.json();
-    if (data.errors) throw new Error(`Shopify Customers GraphQL errors: ${JSON.stringify(data.errors)}`);
-    
-    // Transform customers to include metafields in accessible format (same as locations)
-    const customers = data.data.customers.edges.map(edge => {
-      const customer = edge.node;
-      const metafields = {};
-      
-      // Process metafields into a more accessible format
-      customer.metafields.edges.forEach(metafieldEdge => {
-        const metafield = metafieldEdge.node;
-        const key = `${metafield.namespace}.${metafield.key}`;
-        metafields[key] = metafield.value;
-      });
+// Fetch Shopify data
+async function fetchShopifyData(authData) {
+  console.log('\n📊 === SHOPIFY DATA PULL DETAILS ===');
 
-      return {
-        ...customer,
-        metafields
-      };
-    });
-    
-    allCustomers.push(...customers);
-    hasNextPage = data.data.customers.pageInfo.hasNextPage;
-    cursor = data.data.customers.pageInfo.endCursor;
-  }
-  return allCustomers;
-}
-
-async function fetchShopifyLocations(baseUrl, headers) {
-  // Use GraphQL to get locations with metafields
-  const query = `
-    query GetLocations {
+  // Fetch locations first
+  const locationsQuery = `
+    query getLocations {
       locations(first: 50) {
         edges {
           node {
@@ -429,18 +183,80 @@ async function fetchShopifyLocations(baseUrl, headers) {
               address1
               address2
               city
-              provinceCode
-              countryCode
+              province
               zip
-              phone
+              country
             }
-            metafields(first: 10, namespace: "custom") {
+            isActive
+          }
+        }
+      }
+    }
+  `;
+
+  const locationsData = await graphqlRequest(authData, locationsQuery);
+  const locations = locationsData.locations.edges.map(edge => edge.node);
+
+  console.log('\n📍 SHOPIFY LOCATIONS DATA STRUCTURE:');
+  console.log(JSON.stringify(locations[0], null, 2));
+
+  // Fetch products with variants and inventory
+  const productsQuery = `
+    query getProducts {
+      products(first: 50) {
+        edges {
+          node {
+            id
+            title
+            handle
+            status
+            productType
+            vendor
+            description
+            options {
+              id
+              name
+              position
+              values
+            }
+            variants(first: 50) {
               edges {
                 node {
                   id
-                  key
-                  value
-                  namespace
+                  title
+                  sku
+                  price
+                  inventoryItem {
+                    id
+                    tracked
+                    inventoryLevels(first: 50) {
+                      edges {
+                        node {
+                          id
+                          location {
+                            id
+                          }
+                          quantities(names: ["available"]) {
+                            name
+                            quantity
+                          }
+                        }
+                      }
+                    }
+                  }
+                  weight
+                  weightUnit
+                  metafields(first: 20) {
+                    edges {
+                      node {
+                        id
+                        namespace
+                        key
+                        value
+                        type
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -450,50 +266,35 @@ async function fetchShopifyLocations(baseUrl, headers) {
     }
   `;
 
-  const response = await fetch(`${baseUrl}/graphql.json`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ query })
-  });
+  const productsData = await graphqlRequest(authData, productsQuery);
+  const products = productsData.products.edges.map(edge => edge.node);
 
-  const data = await response.json();
-  
-  if (data.errors) {
-    throw new Error(`Shopify Locations GraphQL errors: ${JSON.stringify(data.errors)}`);
+  // Log detailed structure of first product
+  if (products.length > 0) {
+    console.log('\n📦 SHOPIFY PRODUCT DATA STRUCTURE (First Product):');
+    console.log(JSON.stringify({
+      id: products[0].id,
+      title: products[0].title,
+      status: products[0].status,
+      productType: products[0].productType,
+      vendor: products[0].vendor,
+      options: products[0].options,
+      variants: products[0].variants.edges.map(edge => ({
+        id: edge.node.id,
+        sku: edge.node.sku,
+        price: edge.node.price,
+        inventoryItem: edge.node.inventoryItem,
+        weight: edge.node.weight,
+        weightUnit: edge.node.weightUnit,
+        metafields: edge.node.metafields.edges.map(mf => mf.node)
+      }))
+    }, null, 2));
   }
 
-  // Transform the GraphQL response to include metafields in a more accessible format
-  return data.data.locations.edges.map(edge => {
-    const location = edge.node;
-    const metafields = {};
-    
-    // Process metafields into a more accessible format
-    location.metafields.edges.forEach(metafieldEdge => {
-      const metafield = metafieldEdge.node;
-      const key = `${metafield.namespace}.${metafield.key}`;
-      metafields[key] = metafield.value;
-    });
-
-    return {
-      ...location,
-      metafields
-    };
-  });
-}
-
-async function fetchShopifyData(auth) {
-  const { accessToken, shopDomain } = auth;
-  const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'X-Shopify-Access-Token': accessToken
+  return {
+    locations,
+    products
   };
-  const [products, customers, locations] = await Promise.all([
-    fetchShopifyProducts(baseUrl, headers),
-    fetchShopifyCustomers(baseUrl, headers),
-    fetchShopifyLocations(baseUrl, headers)
-  ]);
-  return { products, customers, locations };
 }
 
 // Main exported function

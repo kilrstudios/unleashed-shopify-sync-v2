@@ -27,10 +27,13 @@ async function getAuthData(kvStore, domain) {
 }
 
 // Helper: Generate HMAC-SHA256 signature for Unleashed API authentication
-async function generateSignature(queryString, apiKey) {
+async function generateSignature(requestPath, apiKey) {
   const encoder = new TextEncoder();
   const keyBuffer = encoder.encode(apiKey);
-  const dataBuffer = encoder.encode(queryString);
+  // The signature should be generated from "GET&" + requestPath
+  const signatureData = `GET&${requestPath}`;
+  console.log('  🔐 Final signature input:', signatureData);
+  const dataBuffer = encoder.encode(signatureData);
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
     keyBuffer,
@@ -54,8 +57,8 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
     queryString
   });
   
-  // According to Unleashed docs, the signature should be METHOD&PATH without query string
-  const signatureInput = `GET&${path}`;
+  // The signature should be generated from the entire request path
+  const signatureInput = queryString ? `${path}?${queryString}` : path;
   console.log('  🔐 Generating signature with input:', signatureInput);
   const signature = await generateSignature(signatureInput, apiKey);
   console.log('  🔑 Generated signature:', signature);

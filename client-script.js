@@ -162,6 +162,8 @@
         })
         .then(data => {
             console.log('Data received:', data);
+            // Log the initial Unleashed & Shopify data for debugging
+            logInitialData(data);
             if (data.success) {
                 // Handle sync response (includes both mapping and mutation results)
                 const mapping = data.mappingResults;
@@ -365,6 +367,31 @@
         }
         
         console.log('🔄 === END SYNC RESULTS ===');
+    }
+
+    // Log initial data pulled from Unleashed & Shopify
+    function logInitialData(data) {
+        if (!data) return;
+        const unleashed = data.unleashed || data.unleashedData || data.unleashed_products || null;
+        const shopify = data.shopify || data.shopifyData || data.shopify_products || null;
+
+        console.group('%c📥 Initial Data Pulled', 'color: #FF9800; font-weight: bold');
+        if (unleashed) {
+            console.group('%cUnleashed', 'color: #03A9F4; font-weight: bold');
+            console.dir(unleashed, { depth: null });
+            console.groupEnd();
+        } else {
+            console.log('⚠️ Unleashed data not present in response');
+        }
+
+        if (shopify) {
+            console.group('%cShopify', 'color: #8BC34A; font-weight: bold');
+            console.dir(shopify, { depth: null });
+            console.groupEnd();
+        } else {
+            console.log('⚠️ Shopify data not present in response');
+        }
+        console.groupEnd();
     }
 
     // Initialize buttons

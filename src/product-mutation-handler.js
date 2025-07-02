@@ -149,136 +149,24 @@ export async function handleProductMutations(request, env) {
  */
 export async function handleProductSync(request, env) {
   try {
-    // Get domain from request
-    let domain = null;
-    
-    try {
-      const rawBody = await request.text();
-      if (!rawBody) {
-        return jsonResponse({ 
-          error: 'Empty request body',
-          details: 'Request body is required and must contain a domain.'
-        }, 400);
-      }
-      
-      const requestBody = JSON.parse(rawBody);
-      domain = requestBody.domain;
-      
-      if (!domain) {
-        return jsonResponse({ 
-          error: 'Domain is required',
-          details: 'The request body must contain a domain field.'
-        }, 400);
-      }
-    } catch (error) {
-      return jsonResponse({ 
-        error: 'Invalid request body',
-        details: error.message
-      }, 400);
-    }
+    const { shopifyClient, unleashedProducts, shopifyProducts } = request;
 
-    // Clean the domain (remove protocol and path)
-    domain = domain.replace(/^https?:\/\//, '').split('/')[0];
+    // Map products
+    console.log(`🗺️ Step 4a: Mapping products...`);
+    const mappingResults = await mapProducts(unleashedProducts, shopifyProducts);
 
-    console.log(`🚀 Starting complete product sync workflow for domain: ${domain}`);
+    // Execute mutations
+    console.log(`🔄 Step 4b: Executing product mutations...`);
+    const mutationResults = await executeProductMutations(shopifyClient, mappingResults);
 
-    // Step 1: Get authentication data from KV store
-    console.log('🔑 Step 1: Getting authentication data...');
-    const authData = await getAuthData(env, domain);
-    
-    if (!authData || !authData.unleashed || !authData.shopify) {
-      throw new Error('Invalid authentication data structure');
-    }
-
-    // Step 2: Pull data from both systems
-    console.log('📊 Step 2: Pulling data from both systems...');
-    const data = await pullAllData(domain, env);
-    
-    console.log('Data pulled successfully:', {
-      unleashed: {
-        products: data.unleashed.products.length
-      },
-      shopify: {
-        products: data.shopify.products.length
-      }
-    });
-
-    // Step 3: Map products
-    console.log('🗺️ Step 3: Mapping products...');
-    const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
-    
-    console.log('Product mapping completed:', {
-      toCreate: productMappingResults.toCreate.length,
-      toUpdate: productMappingResults.toUpdate.length,
-      toArchive: productMappingResults.toArchive.length,
-      errors: productMappingResults.errors.length,
-      processed: productMappingResults.processed
-    });
-
-    // Step 4: Execute mutations on Shopify
-    console.log('🔄 Step 4: Executing product mutations on Shopify...');
-    const mutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain);
-
-    console.log('✅ Complete product sync workflow completed successfully');
-
-    return jsonResponse({
-      success: true,
-      domain,
-      workflow: 'complete_sync',
-      steps: {
-        dataFetch: {
-          unleashed: {
-            products: data.unleashed.products.length
-          },
-          shopify: {
-            products: data.shopify.products.length
-          }
-        },
-        mapping: {
-          toCreate: productMappingResults.toCreate.length,
-          toUpdate: productMappingResults.toUpdate.length,
-          toArchive: productMappingResults.toArchive.length,
-          errors: productMappingResults.errors.length,
-          processed: productMappingResults.processed
-        },
-        mutations: {
-          bulkOperation: {
-            success: mutationResults.bulkOperation?.success || false,
-            operationId: mutationResults.bulkOperation?.operation?.id || null,
-            error: mutationResults.bulkOperation?.error || null
-          },
-          created: {
-            successful: mutationResults.created.successful.length,
-            failed: mutationResults.created.failed.length
-          },
-          updated: {
-            successful: mutationResults.updated.successful.length,
-            failed: mutationResults.updated.failed.length
-          },
-          archived: {
-            successful: mutationResults.archived.successful.length,
-            failed: mutationResults.archived.failed.length
-          },
-          inventory: {
-            successful: mutationResults.inventory.successful.length,
-            failed: mutationResults.inventory.failed.length
-          },
-          summary: mutationResults.summary,
-          errors: mutationResults.errors || []
-        }
-      },
-      timestamp: new Date().toISOString()
-    });
+    return mutationResults;
   } catch (error) {
-    console.error('🚨 Complete product sync workflow error:', error);
-    return jsonResponse({ 
-      error: error.message || 'Internal server error',
-      details: error.stack 
-    }, 500);
+    console.error('Error in handleProductSync:', error);
+    throw error;
   }
 }
 
-async function handleProductMutations(shopifyClient, mappingResults) {
+async function executeProductMutations(shopifyClient, mappingResults) {
   const results = {
     created: 0,
     updated: 0,
@@ -362,7 +250,13 @@ async function handleProductMutations(shopifyClient, mappingResults) {
 
     return results;
   } catch (error) {
-    console.error('Error in handleProductMutations:', error);
+    console.error('Error in executeProductMutations:', error);
     throw error;
   }
-} 
+}
+
+export {
+  handleProductMutations,
+  handleProductSync,
+  executeProductMutations
+}; 

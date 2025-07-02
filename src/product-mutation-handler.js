@@ -1,6 +1,7 @@
 import { pullAllData } from './data_pull.js';
 import { mapProducts } from './product-mapping.js';
 import { mutateProducts } from './product-mutations.js';
+import { handlePostSyncOperations } from './post-sync-handler';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -149,7 +150,7 @@ export async function handleProductMutations(request, env) {
  */
 export async function handleProductSync(request, env) {
   try {
-    const { shopifyClient, unleashedProducts, shopifyProducts } = request;
+    const { shopifyClient, unleashedProducts, shopifyProducts, shopifyLocations } = request;
 
     // Map products
     console.log(`🗺️ Step 4a: Mapping products...`);
@@ -159,7 +160,19 @@ export async function handleProductSync(request, env) {
     console.log(`🔄 Step 4b: Executing product mutations...`);
     const mutationResults = await executeProductMutations(shopifyClient, mappingResults);
 
-    return mutationResults;
+    // Execute post-sync operations (inventory and images)
+    console.log(`🔄 Step 4c: Executing post-sync operations...`);
+    const postSyncResults = await handlePostSyncOperations(
+      shopifyClient,
+      unleashedProducts,
+      shopifyProducts,
+      shopifyLocations
+    );
+
+    return {
+      ...mutationResults,
+      postSync: postSyncResults
+    };
   } catch (error) {
     console.error('Error in handleProductSync:', error);
     throw error;

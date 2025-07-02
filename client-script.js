@@ -376,12 +376,14 @@
         const unleashed = data.unleashed ||
                          data.unleashedData ||
                          data.unleashed_products ||
+                         (data.steps && data.steps.dataFetch && data.steps.dataFetch.raw && data.steps.dataFetch.raw.unleashed) ||
                          (data.steps && data.steps.dataFetch && data.steps.dataFetch.data && data.steps.dataFetch.data.unleashed) ||
                          null;
 
         const shopify = data.shopify ||
                         data.shopifyData ||
                         data.shopify_products ||
+                        (data.steps && data.steps.dataFetch && data.steps.dataFetch.raw && data.steps.dataFetch.raw.shopify) ||
                         (data.steps && data.steps.dataFetch && data.steps.dataFetch.data && data.steps.dataFetch.data.shopify) ||
                         null;
 

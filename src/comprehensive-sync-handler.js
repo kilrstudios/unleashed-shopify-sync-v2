@@ -122,18 +122,23 @@ export async function handleComprehensiveSync(request, env) {
       results.steps.dataFetch = {
         success: true,
         duration: `${((Date.now() - stepStart) / 1000).toFixed(2)}s`,
-                  data: {
-            unleashed: {
-              warehouses: data.unleashed.warehouses.length,
-              customers: data.unleashed.customers.length,
-              contacts: data.unleashed.contacts.length,
-              products: data.unleashed.products.length
-            },
+        data: {
+          unleashed: {
+            warehouses: data.unleashed.warehouses.length,
+            customers: data.unleashed.customers.length,
+            contacts: data.unleashed.contacts.length,
+            products: data.unleashed.products.length
+          },
           shopify: {
             locations: data.shopify.locations.length,
             customers: data.shopify.customers.length,
             products: data.shopify.products.length
           }
+        },
+        // Include raw datasets for debugging/inspection (can be omitted in production)
+        raw: {
+          unleashed: data.unleashed,
+          shopify: data.shopify
         }
       };
       

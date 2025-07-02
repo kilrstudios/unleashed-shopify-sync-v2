@@ -74,18 +74,9 @@ function buildProductSetInput(productData, isUpdate = false) {
           }));
       }
 
-      // Handle variant options using optionValues array
-      const optionValues = [];
-      if (variant.option1) optionValues.push({ optionName: 'Title', name: variant.option1 });
-      if (variant.option2) optionValues.push({ optionName: 'Size', name: variant.option2 });
-      if (variant.option3) optionValues.push({ optionName: 'Color', name: variant.option3 });
-      
-      // If no specific options, use default
-      if (optionValues.length === 0) {
-        optionValues.push({ optionName: 'Title', name: 'Default Title' });
-      }
-      
-      variantInput.optionValues = optionValues;
+      // For now, don't set optionValues - let Shopify auto-generate
+      // This will be auto-populated based on the productOptions
+      // variantInput.optionValues = will be set automatically
 
       return variantInput;
     })

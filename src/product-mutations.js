@@ -87,18 +87,20 @@ function buildProductSetInput(productData, isUpdate = false) {
           }));
       }
 
-      // Only add optionValues for multi-variant products with actual option values
-      if (!isSingleVariantDefault) {
+      // Always add optionValues - Shopify requires this field for productSet API
+      if (isSingleVariantDefault) {
+        // Single-variant products need Default Title option value
+        variantInput.optionValues = [{ optionName: "Title", name: "Default Title" }];
+      } else {
+        // Multi-variant products with actual option values
         const optionValues = [];
         if (variant.option1) optionValues.push({ optionName: productData.options[0]?.name || 'Option1', name: variant.option1 });
         if (variant.option2) optionValues.push({ optionName: productData.options[1]?.name || 'Option2', name: variant.option2 });
         if (variant.option3) optionValues.push({ optionName: productData.options[2]?.name || 'Option3', name: variant.option3 });
         
-        if (optionValues.length > 0) {
-          variantInput.optionValues = optionValues;
-        }
+        // If no option values found, fall back to default
+        variantInput.optionValues = optionValues.length > 0 ? optionValues : [{ optionName: "Title", name: "Default Title" }];
       }
-      // For single-variant default products, don't include optionValues at all
 
       return variantInput;
     })

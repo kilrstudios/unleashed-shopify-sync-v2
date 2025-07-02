@@ -1268,6 +1268,40 @@ async function updateProduct(shopifyClient, productData) {
   }
 }
 
+async function getProductById(shopifyClient, productId) {
+  try {
+    const query = `
+      query getProduct($id: ID!) {
+        product(id: $id) {
+          id
+          title
+          handle
+          variants(first: 10) {
+            edges {
+              node {
+                id
+                sku
+                title
+                inventoryItemId
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      id: productId
+    };
+
+    const response = await shopifyClient.request(query, variables);
+    return response.product;
+  } catch (error) {
+    console.error('Error getting product by ID:', error);
+    throw error;
+  }
+}
+
 export {
   mutateProducts,
   buildProductSetInput,
@@ -1277,5 +1311,8 @@ export {
   archiveProducts,
   handleProductQueueMessage,
   handleInventoryUpdate,
-  handleImageUpdate
+  handleImageUpdate,
+  getProductById,
+  createProduct,
+  updateProduct
 }; 

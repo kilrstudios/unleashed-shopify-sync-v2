@@ -83,7 +83,7 @@ function buildProductSetInput(productData, isUpdate = false) {
             namespace: mf.namespace,
             key: mf.key,
             value: mf.value.toString(),
-            type: 'money'
+            type: 'single_line_text_field'  // Changed from 'money' to 'single_line_text_field'
           }));
       }
 

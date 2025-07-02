@@ -7,19 +7,7 @@ async function getAuthData(kvStore, domain) {
     if (!authString) {
       throw new Error(`No authentication data found for domain: ${domain}`);
     }
-    const authData = JSON.parse(authString);
-    
-    // Trim any whitespace from the auth credentials
-    if (authData.unleashed) {
-      authData.unleashed.apiKey = authData.unleashed.apiKey?.trim();
-      authData.unleashed.apiId = authData.unleashed.apiId?.trim();
-    }
-    if (authData.shopify) {
-      authData.shopify.accessToken = authData.shopify.accessToken?.trim();
-      authData.shopify.shopDomain = authData.shopify.shopDomain?.trim();
-    }
-    
-    return authData;
+    return JSON.parse(authString);
   } catch (error) {
     console.error('Error getting auth data:', error);
     throw new Error(`Failed to get authentication data: ${error.message}`);
@@ -27,11 +15,9 @@ async function getAuthData(kvStore, domain) {
 }
 
 // Helper: Generate HMAC-SHA256 signature for Unleashed API authentication
-async function generateSignature(queryString, apiKey) {
+async function generateUnleashedSignature(queryString, apiKey) {
   const encoder = new TextEncoder();
   const keyBuffer = encoder.encode(apiKey);
-  // According to the official docs, only the query string is used for signature
-  console.log('  🔐 Final signature input:', queryString);
   const dataBuffer = encoder.encode(queryString);
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
@@ -49,27 +35,14 @@ async function generateSignature(queryString, apiKey) {
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
   const queryString = url.search ? url.search.substring(1) : '';
-  console.log('  🔗 URL parts:', {
-    full: endpoint,
-    path: url.pathname,
-    queryString
-  });
-  
-  // According to Unleashed docs, the signature is generated from just the query string
-  console.log('  🔐 Generating signature with input:', queryString);
-  const signature = await generateSignature(queryString, apiKey);
-  console.log('  🔑 Generated signature:', signature);
-  
-  const headers = {
+  const signature = await generateUnleashedSignature(queryString, apiKey);
+  return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     'api-auth-id': apiId,
     'api-auth-signature': signature,
     'Client-Type': 'kilr/unleashedshopify'
   };
-  
-  console.log('  📤 Request headers:', JSON.stringify(headers, null, 2));
-  return headers;
 }
 
 // Fetch stock on hand for a product
@@ -77,20 +50,7 @@ async function fetchStockOnHand(productCode, authData) {
   try {
     console.log(`📦 Fetching stock on hand for product ${productCode}`);
     
-    const stockUrl = `https://api.unleashedsoftware.com/StockOnHand/${productCode}`;
-    console.log(`  🔗 Using URL: ${stockUrl}`);
-    
-    // Log auth data structure to debug
-    console.log('  🔑 Auth data structure:', JSON.stringify({
-      hasUnleashed: true,
-      apiKeyExists: !!authData?.apiKey,
-      apiIdExists: !!authData?.apiId
-    }));
-
-    if (!authData?.apiKey || !authData?.apiId) {
-      throw new Error('Missing Unleashed API credentials');
-    }
-    
+    const stockUrl = `https://api.unleashedsoftware.com/StockOnHand?productCode=${productCode}`;
     const response = await fetch(stockUrl, {
       method: 'GET',
       headers: await createUnleashedHeaders(stockUrl, authData.apiKey, authData.apiId)
@@ -105,13 +65,17 @@ async function fetchStockOnHand(productCode, authData) {
     const items = data.Items || [];
     
     console.log(`📊 Stock levels for product ${productCode}:`);
-    items.forEach(item => {
-      console.log(`  - Warehouse: ${item.WarehouseCode}`);
-      console.log(`    Available: ${item.QuantityAvailable}`);
-      console.log(`    On Hand: ${item.QtyOnHand}`);
-      console.log(`    Allocated: ${item.QtyAllocated}`);
-      console.log(`    In Transit: ${item.QtyInTransit}`);
-    });
+    if (items.length === 0) {
+      console.log(`  ⚠️ No stock data found`);
+    } else {
+      items.forEach(item => {
+        console.log(`  - Warehouse: ${item.WarehouseCode}`);
+        console.log(`    Available: ${item.QuantityAvailable}`);
+        console.log(`    On Hand: ${item.QtyOnHand}`);
+        console.log(`    Allocated: ${item.QtyAllocated}`);
+        console.log(`    In Transit: ${item.QtyInTransit}`);
+      });
+    }
 
     return items;
   } catch (error) {
@@ -126,19 +90,6 @@ async function fetchProductAttachments(productCode, authData) {
     console.log(`🖼️ Fetching attachments for product ${productCode}`);
     
     const attachmentsUrl = `https://api.unleashedsoftware.com/Products/${productCode}/Attachments`;
-    console.log(`  🔗 Using URL: ${attachmentsUrl}`);
-    
-    // Log auth data structure to debug
-    console.log('  🔑 Auth data structure:', JSON.stringify({
-      hasUnleashed: true,
-      apiKeyExists: !!authData?.apiKey,
-      apiIdExists: !!authData?.apiId
-    }));
-
-    if (!authData?.apiKey || !authData?.apiId) {
-      throw new Error('Missing Unleashed API credentials');
-    }
-    
     const response = await fetch(attachmentsUrl, {
       method: 'GET',
       headers: await createUnleashedHeaders(attachmentsUrl, authData.apiKey, authData.apiId)
@@ -153,12 +104,20 @@ async function fetchProductAttachments(productCode, authData) {
     const items = data.Items || [];
     
     console.log(`📸 Attachments for product ${productCode}:`);
-    items.forEach(item => {
-      console.log(`  - File: ${item.FileName}`);
-      console.log(`    Type: ${item.FileType}`);
-      console.log(`    Description: ${item.Description || 'N/A'}`);
-      console.log(`    Download URL: ${item.DownloadUrl || 'N/A'}`);
-    });
+    if (items.length === 0) {
+      console.log(`  ⚠️ No attachments found`);
+    } else {
+      items.forEach((item, index) => {
+        console.log(`  ${index + 1}. File: ${item.FileName}`);
+        console.log(`     Description: ${item.Description || 'No description'}`);
+        console.log(`     File Size: ${item.FileSize || 'Unknown'} bytes`);
+        console.log(`     Content Type: ${item.ContentType || 'Unknown'}`);
+        console.log(`     Is Image: ${item.FileName?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'Yes' : 'No'}`);
+        if (item.DownloadUrl) {
+          console.log(`     Download URL: ${item.DownloadUrl}`);
+        }
+      });
+    }
 
     return items;
   } catch (error) {

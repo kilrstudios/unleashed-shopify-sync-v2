@@ -280,7 +280,19 @@ async function fetchShopifyData(authData) {
   `;
 
   const productsData = await graphqlRequest(authData, productsQuery);
-  const products = productsData.products.edges.map(edge => edge.node);
+  const products = productsData.products.edges.map(edge => {
+    const product = edge.node;
+    // Flatten variants connection to array for downstream compatibility
+    product.variants = product.variants.edges.map(vEdge => {
+      const variantNode = vEdge.node;
+      // Flatten inventory levels as array
+      if (variantNode.inventoryItem && variantNode.inventoryItem.inventoryLevels) {
+        variantNode.inventoryItem.inventoryLevels = variantNode.inventoryItem.inventoryLevels.edges.map(lEdge => lEdge.node);
+      }
+      return variantNode;
+    });
+    return product;
+  });
 
   // Log detailed structure of first product
   if (products.length > 0) {

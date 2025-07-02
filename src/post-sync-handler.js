@@ -110,8 +110,8 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
           }
 
           // Find stock on hand for this warehouse
-          const warehouseStock = unleashedProduct.Warehouses?.find(w => 
-            w.WarehouseCode === warehouseCode
+          const warehouseStock = unleashedProduct.StockOnHand?.find(s => 
+            s.WarehouseCode === warehouseCode
           );
 
           if (!warehouseStock) {
@@ -119,13 +119,13 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
             continue;
           }
 
-          console.log(`📊 Updating inventory for location ${location.name} (${warehouseCode}): ${warehouseStock.QtyOnHand} units`);
+          console.log(`📊 Updating inventory for location ${location.name} (${warehouseCode}): ${warehouseStock.QuantityAvailable} units`);
           
           const response = await updateProductInventory(
             shopifyClient,
             variant.inventoryItemId,
             location.id,
-            warehouseStock.QtyOnHand
+            warehouseStock.QuantityAvailable
           );
 
           if (response.userErrors?.length > 0) {
@@ -140,7 +140,7 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
             results.inventory.successful.push({
               productCode: unleashedProduct.ProductCode,
               location: location.name,
-              quantity: warehouseStock.QtyOnHand
+              quantity: warehouseStock.QuantityAvailable
             });
           }
         } catch (error) {
@@ -154,35 +154,37 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
       }
 
       // Update images
-      if (unleashedProduct.ImageUrl || (unleashedProduct.Images && unleashedProduct.Images.length > 0)) {
+      if (unleashedProduct.Attachments && unleashedProduct.Attachments.length > 0) {
         console.log(`\n🖼️ Updating images for product ${unleashedProduct.ProductCode}...`);
         
         try {
           // Get all image URLs
-          const imageUrls = [
-            unleashedProduct.ImageUrl,
-            ...(unleashedProduct.Images || []).map(img => img.Url)
-          ].filter(Boolean);
+          const imageUrls = unleashedProduct.Attachments
+            .filter(a => a.FileName.match(/\.(jpg|jpeg|png|gif)$/i))
+            .map(a => ({
+              src: a.DownloadUrl,
+              altText: a.Description || `Image for ${unleashedProduct.ProductCode}`
+            }));
 
-          for (const imageUrl of imageUrls) {
+          for (const imageData of imageUrls) {
             const response = await updateProductImage(
               shopifyClient,
               shopifyProduct.id,
-              imageUrl
+              imageData.src
             );
 
             if (response.userErrors?.length > 0) {
               console.error(`❌ Failed to update image:`, response.userErrors);
               results.images.failed.push({
                 productCode: unleashedProduct.ProductCode,
-                imageUrl,
+                imageUrl: imageData.src,
                 errors: response.userErrors
               });
             } else {
               console.log(`✅ Successfully updated image`);
               results.images.successful.push({
                 productCode: unleashedProduct.ProductCode,
-                imageUrl,
+                imageUrl: imageData.src,
                 imageId: response.image.id
               });
             }
@@ -199,12 +201,12 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
 
     // Log summary
     console.log(`\n📊 Post-sync operations summary:`);
-    console.log(`Inventory updates: ${results.inventory.successful.length} successful, ${results.inventory.failed.length} failed`);
-    console.log(`Image updates: ${results.images.successful.length} successful, ${results.images.failed.length} failed`);
+    console.log(`✅ Inventory updates: ${results.inventory.successful.length} successful, ${results.inventory.failed.length} failed`);
+    console.log(`✅ Image updates: ${results.images.successful.length} successful, ${results.images.failed.length} failed`);
 
     return results;
   } catch (error) {
-    console.error('Error in post-sync operations:', error);
+    console.error('Error in handlePostSyncOperations:', error);
     throw error;
   }
 }

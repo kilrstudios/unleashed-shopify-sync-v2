@@ -45,6 +45,38 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   };
 }
 
+// Fetch stock on hand for a product
+async function fetchStockOnHand(productCode, authData) {
+  const stockUrl = `https://api.unleashedsoftware.com/StockOnHand?productCode=${productCode}`;
+  const response = await fetch(stockUrl, {
+    method: 'GET',
+    headers: await createUnleashedHeaders(stockUrl, authData.apiKey, authData.apiId)
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch stock for ${productCode}: ${response.status} ${response.statusText}`);
+  }
+  
+  const data = await response.json();
+  return data.Items || [];
+}
+
+// Fetch attachments (images) for a product
+async function fetchProductAttachments(productCode, authData) {
+  const attachmentsUrl = `https://api.unleashedsoftware.com/Attachments?productCode=${productCode}`;
+  const response = await fetch(attachmentsUrl, {
+    method: 'GET',
+    headers: await createUnleashedHeaders(attachmentsUrl, authData.apiKey, authData.apiId)
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch attachments for ${productCode}: ${response.status} ${response.statusText}`);
+  }
+  
+  const data = await response.json();
+  return data.Items || [];
+}
+
 // Fetch Unleashed data
 async function fetchUnleashedData(authData) {
   const results = {};
@@ -96,6 +128,31 @@ async function fetchUnleashedData(authData) {
       if (!products[0].AttributeSet && !products[0].Attributes) {
         console.log(`   Available fields:`, Object.keys(products[0]));
       }
+    }
+    
+    // For each product, fetch stock on hand and attachments
+    console.log(`\n📦 Fetching additional data for ${products.length} products...`);
+    for (const product of products) {
+      try {
+        // Fetch stock on hand
+        console.log(`   🏢 Fetching stock for ${product.ProductCode}...`);
+        const stockData = await fetchStockOnHand(product.ProductCode, authData);
+        product.StockOnHand = stockData;
+        
+        // Fetch attachments (images)
+        console.log(`   🖼️ Fetching attachments for ${product.ProductCode}...`);
+        const attachments = await fetchProductAttachments(product.ProductCode, authData);
+        product.Attachments = attachments.filter(a => a.FileName.match(/\.(jpg|jpeg|png|gif)$/i));
+        
+        if (product.Attachments.length > 0) {
+          console.log(`      Found ${product.Attachments.length} image(s)`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Error fetching additional data for ${product.ProductCode}:`, error.message);
+      }
+      
+      // Add small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     allProducts.push(...products);

@@ -9,14 +9,11 @@ function parseOptionNames(optionNamesString) {
 function generateVariantTitle(attributeSet) {
   if (!attributeSet) return 'Default Title';
   
-  const values = [
-    attributeSet['Option 1 Value'],
-    attributeSet['Option 2 Value'], 
-    attributeSet['Option 3 Value']
-  ].filter(Boolean);
-  
-  if (!values.length) return 'Default Title';
-  return values.join(' / ');
+  const options = extractVariantOptions(attributeSet);
+  return Object.values(options)
+    .filter(Boolean)
+    .filter(v => v.toLowerCase() !== 'null')
+    .join(' / ');
 }
 
 // Compare product data to determine if update is needed
@@ -83,7 +80,7 @@ function compareProductData(unleashedProductData, shopifyProduct) {
   }
   
   // Check if image sync is needed (but don't include in differences)
-  if (unleashedProductData.ImageUrl || (unleashedProductData.images && unleashedProductData.images.length > 0)) {
+  if (unleashedProductData.Attachments && unleashedProductData.Attachments.length > 0) {
     needsPostSync.images = true;
   }
   
@@ -108,12 +105,12 @@ function getAttributeValue(attributeSet, attributeName) {
 }
 
 function extractVariantOptions(attributeSet) {
-  if (!attributeSet) return { option1: null, option2: null, option3: null };
+  if (!attributeSet) return { option1: 'Default Title' };
   
   return {
-    option1: getAttributeValue(attributeSet, 'Option 1 Value') || null,
-    option2: getAttributeValue(attributeSet, 'Option 2 Value') || null,
-    option3: getAttributeValue(attributeSet, 'Option 3 Value') || null
+    option1: getAttributeValue(attributeSet, 'Option 1 Value'),
+    option2: getAttributeValue(attributeSet, 'Option 2 Value'),
+    option3: getAttributeValue(attributeSet, 'Option 3 Value')
   };
 }
 
@@ -266,9 +263,16 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             mainProduct.ProductSubGroup?.GroupName,
             mainProduct.ProductGroup?.GroupName
           ].filter(Boolean),
-          images: [{
-            src: mainProduct.ImageUrl || (mainProduct.Images && mainProduct.Images[0]?.Url)
-          }].filter(img => img.src),
+          images: group.reduce((allImages, product) => {
+            // Add images from Attachments
+            if (product.Attachments && product.Attachments.length > 0) {
+              allImages.push(...product.Attachments.map(attachment => ({
+                src: attachment.DownloadUrl,
+                alt: attachment.Description || `Image for ${product.ProductCode}`
+              })));
+            }
+            return allImages;
+          }, []),
           options: isMultiVariant ? 
             optionNames.map(name => ({ name })) :
             [{ name: 'Title' }],
@@ -288,6 +292,7 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,
+              stock_on_hand: product.StockOnHand || [],
               metafields: Array.from({ length: 10 }, (_, i) => ({
                 namespace: 'custom',
                 key: `price_tier_${i + 1}`,

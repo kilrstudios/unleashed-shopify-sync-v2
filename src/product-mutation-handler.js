@@ -256,7 +256,5 @@ async function executeProductMutations(shopifyClient, mappingResults) {
 }
 
 export {
-  handleProductMutations,
-  handleProductSync,
   executeProductMutations
 }; 

@@ -254,24 +254,24 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           variants: group.map(product => {
             const productVariantOptions = extractVariantOptions(product.AttributeSet);
             return {
-              sku: product.ProductCode,
-              title: isMultiVariant 
+            sku: product.ProductCode,
+            title: isMultiVariant 
                 ? generateVariantTitle(product.AttributeSet)
-                : 'Default Title',
-              price: product.DefaultSellPrice,
-              compare_at_price: null,
-              weight: product.Weight || 0,
-              weight_unit: 'g',
-              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-              inventory_policy: 'deny',
+              : 'Default Title',
+            price: product.DefaultSellPrice,
+            compare_at_price: null,
+            weight: product.Weight || 0,
+            weight_unit: 'g',
+            inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+            inventory_policy: 'deny',
               option1: productVariantOptions.option1,
               option2: productVariantOptions.option2,
               option3: productVariantOptions.option3,
-              metafields: Array.from({ length: 10 }, (_, i) => ({
-                namespace: 'custom',
-                key: `price_tier_${i + 1}`,
-                value: product[`SellPriceTier${i + 1}`]?.Value || ''
-              }))
+            metafields: Array.from({ length: 10 }, (_, i) => ({
+              namespace: 'custom',
+              key: `price_tier_${i + 1}`,
+              value: product[`SellPriceTier${i + 1}`]?.Value || ''
+            }))
             };
           }),
           options: productOptions
@@ -307,16 +307,16 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
                 console.log(`      📝 ${diff}`);
               });
               
-              productData.id = matchingProduct.id;
-              productData.variants = productData.variants.map(v => {
-                const matchingVariant = matchingProduct.variants.find(mv => mv.sku === v.sku);
+            productData.id = matchingProduct.id;
+            productData.variants = productData.variants.map(v => {
+              const matchingVariant = matchingProduct.variants.find(mv => mv.sku === v.sku);
                 if (matchingVariant) {
                   console.log(`      🔗 Variant SKU "${v.sku}" matched to existing variant ID: ${matchingVariant.id}`);
                   v.id = matchingVariant.id;
                 }
-                return v;
-              });
-              results.toUpdate.push(productData);
+              return v;
+            });
+            results.toUpdate.push(productData);
             } else {
               // Product is identical - skip update
               console.log(`   ✅ Product is IDENTICAL to existing Shopify product - SKIPPING update`);

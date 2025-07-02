@@ -37,6 +37,59 @@ const PROVINCE_CODE_MAPPING = {
   'Saskatchewan': 'SK', 'Yukon': 'YT'
 };
 
+// Compare location data to determine if update is needed
+function compareLocationData(unleashedData, shopifyLocation) {
+  const differences = [];
+  
+  // Compare basic location fields
+  if (unleashedData.name !== shopifyLocation.name) {
+    differences.push(`name: "${shopifyLocation.name}" → "${unleashedData.name}"`);
+  }
+  
+  // Compare address fields
+  if (shopifyLocation.address) {
+    if (unleashedData.address1 !== shopifyLocation.address.address1) {
+      differences.push(`address1: "${shopifyLocation.address.address1}" → "${unleashedData.address1}"`);
+    }
+    
+    if (unleashedData.address2 !== (shopifyLocation.address.address2 || '')) {
+      differences.push(`address2: "${shopifyLocation.address.address2 || ''}" → "${unleashedData.address2}"`);
+    }
+    
+    if (unleashedData.city !== shopifyLocation.address.city) {
+      differences.push(`city: "${shopifyLocation.address.city}" → "${unleashedData.city}"`);
+    }
+    
+    if (unleashedData.provinceCode !== shopifyLocation.address.provinceCode) {
+      differences.push(`provinceCode: "${shopifyLocation.address.provinceCode}" → "${unleashedData.provinceCode}"`);
+    }
+    
+    if (unleashedData.countryCode !== shopifyLocation.address.countryCode) {
+      differences.push(`countryCode: "${shopifyLocation.address.countryCode}" → "${unleashedData.countryCode}"`);
+    }
+    
+    if (unleashedData.zip !== shopifyLocation.address.zip) {
+      differences.push(`zip: "${shopifyLocation.address.zip}" → "${unleashedData.zip}"`);
+    }
+    
+    if (unleashedData.phone !== shopifyLocation.address.phone) {
+      differences.push(`phone: "${shopifyLocation.address.phone}" → "${unleashedData.phone}"`);
+    }
+  }
+  
+  // Check warehouse code metafield
+  const hasWarehouseCode = shopifyLocation.metafields && shopifyLocation.metafields['custom.warehouse_code'] === unleashedData.warehouseCode;
+  if (!hasWarehouseCode) {
+    differences.push(`warehouseCode: "${shopifyLocation.metafields?.['custom.warehouse_code'] || 'None'}" → "${unleashedData.warehouseCode}"`);
+  }
+  
+  return {
+    hasChanges: differences.length > 0,
+    differences: differences,
+    needsWarehouseCodeMetafield: !hasWarehouseCode
+  };
+}
+
 async function mapLocations(unleashedWarehouses, shopifyLocations) {
   console.log('🗺️ === STARTING LOCATION MAPPING ===');
   console.log(`📊 Input data: ${unleashedWarehouses.length} Unleashed warehouses, ${shopifyLocations.length} Shopify locations`);
@@ -145,38 +198,32 @@ async function mapLocations(unleashedWarehouses, shopifyLocations) {
         if (matchingLocation) {
           // Update existing location
           console.log(`   ✅ Match found! Existing location: "${matchingLocation.name}" (ID: ${matchingLocation.id})`);
-          console.log(`   🔄 Will UPDATE existing location`);
           
-          // Ensure location ID has the proper Shopify format
-          const idString = String(matchingLocation.id);
-          const locationId = idString.startsWith('gid://') 
-            ? idString 
-            : `gid://shopify/Location/${idString}`;
+          // Check if update is needed
+          const comparison = compareLocationData(locationData, matchingLocation);
           
-          locationData.id = locationId;
-          
-          // Check if this location needs warehouse code metafield added
-          const hasWarehouseCode = matchingLocation.metafields && matchingLocation.metafields['custom.warehouse_code'];
-          if (!hasWarehouseCode) {
-            console.log(`   📝 Location missing warehouse code metafield - will add it during update`);
-            locationData.needsWarehouseCodeMetafield = true;
-          }
-          
-          results.toUpdate.push(locationData);
-          matchResult.action = 'update';
-          matchResult.existingLocationId = locationId;
-          matchResult.matchType = hasWarehouseCode ? 'warehouse_code' : 'name_fallback';
-          
-          // Log the differences for updates
-          console.log(`   📝 Comparing current vs new data:`);
-          console.log(`      Name: "${matchingLocation.name}" → "${locationData.name}"`);
-          if (matchingLocation.address) {
-            console.log(`      Address1: "${matchingLocation.address.address1 || 'N/A'}" → "${locationData.address1}"`);
-            console.log(`      City: "${matchingLocation.address.city || 'N/A'}" → "${locationData.city}"`);
-            console.log(`      Province: "${matchingLocation.address.provinceCode || 'N/A'}" → "${locationData.provinceCode}"`);
-            console.log(`      Country: "${matchingLocation.address.countryCode || 'N/A'}" → "${locationData.countryCode}"`);
-            console.log(`      Zip: "${matchingLocation.address.zip || 'N/A'}" → "${locationData.zip}"`);
-            console.log(`      Phone: "${matchingLocation.address.phone || 'N/A'}" → "${locationData.phone}"`);
+          if (comparison.hasChanges) {
+            console.log(`   🔄 Changes detected - will UPDATE location:`);
+            comparison.differences.forEach(diff => console.log(`      - ${diff}`));
+            
+            // Ensure location ID has the proper Shopify format
+            const idString = String(matchingLocation.id);
+            const locationId = idString.startsWith('gid://') 
+              ? idString 
+              : `gid://shopify/Location/${idString}`;
+            
+            locationData.id = locationId;
+            locationData.needsWarehouseCodeMetafield = comparison.needsWarehouseCodeMetafield;
+            
+            results.toUpdate.push(locationData);
+            matchResult.action = 'update';
+            matchResult.existingLocationId = locationId;
+            matchResult.matchType = comparison.needsWarehouseCodeMetafield ? 'name_fallback' : 'warehouse_code';
+            matchResult.differences = comparison.differences;
+          } else {
+            console.log(`   ✨ No changes needed - skipping update`);
+            matchResult.action = 'skip';
+            matchResult.reason = 'no_changes';
           }
         } else {
           // Create new location

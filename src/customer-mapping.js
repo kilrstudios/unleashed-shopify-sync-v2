@@ -119,9 +119,19 @@ async function mapCustomers(unleashedContacts, unleashedCustomers, shopifyCustom
         }
 
         if (matchingCustomer) {
-          // Update existing customer
-          customerData.id = matchingCustomer.id;
-          results.toUpdate.push(customerData);
+          // Check if update is needed
+          const comparison = compareCustomerData(customerData, matchingCustomer);
+          
+          if (comparison.hasChanges) {
+            console.log(`   🔄 Changes detected - will UPDATE customer:`);
+            comparison.differences.forEach(diff => console.log(`      - ${diff}`));
+            
+            // Update existing customer
+            customerData.id = matchingCustomer.id;
+            results.toUpdate.push(customerData);
+          } else {
+            console.log(`   ✨ No changes needed - skipping update`);
+          }
         } else {
           // Create new customer
           results.toCreate.push(customerData);
@@ -174,6 +184,42 @@ async function mapCustomers(unleashedContacts, unleashedCustomers, shopifyCustom
 
   console.log('👥 === CUSTOMER MAPPING COMPLETE ===\n');
   return results;
+}
+
+// Compare customer data to determine if update is needed
+function compareCustomerData(unleashedData, shopifyCustomer) {
+  const differences = [];
+  
+  // Compare basic customer fields
+  if (unleashedData.firstName !== shopifyCustomer.firstName) {
+    differences.push(`firstName: "${shopifyCustomer.firstName}" → "${unleashedData.firstName}"`);
+  }
+  
+  if (unleashedData.lastName !== shopifyCustomer.lastName) {
+    differences.push(`lastName: "${shopifyCustomer.lastName}" → "${unleashedData.lastName}"`);
+  }
+  
+  if (unleashedData.email.toLowerCase() !== shopifyCustomer.email.toLowerCase()) {
+    differences.push(`email: "${shopifyCustomer.email}" → "${unleashedData.email}"`);
+  }
+  
+  if (unleashedData.phone !== shopifyCustomer.phone) {
+    differences.push(`phone: "${shopifyCustomer.phone}" → "${unleashedData.phone}"`);
+  }
+  
+  // Compare metafields
+  const shopifyMetafields = shopifyCustomer.metafields || {};
+  for (const metafield of unleashedData.metafields) {
+    const currentValue = shopifyMetafields[`${metafield.namespace}.${metafield.key}`];
+    if (currentValue !== metafield.value) {
+      differences.push(`${metafield.namespace}.${metafield.key}: "${currentValue || 'None'}" → "${metafield.value}"`);
+    }
+  }
+  
+  return {
+    hasChanges: differences.length > 0,
+    differences: differences
+  };
 }
 
 export { mapCustomers }; 

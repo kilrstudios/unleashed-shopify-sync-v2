@@ -49,67 +49,75 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
 async function fetchUnleashedData(authData) {
   const results = {};
   
-  // Products - Get basic list first, then fetch detailed data with AttributeSet
-  console.log(`\n🔍 FETCHING PRODUCTS WITH ATTRIBUTESET DATA...`);
+  // Products - Fetch ALL products with AttributeSet data using proper endpoint
+  console.log(`\n🔍 FETCHING ALL PRODUCTS WITH ATTRIBUTESET DATA...`);
   
-  const productsUrl = 'https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=1';
-  const productsResponse = await fetch(productsUrl, {
-    method: 'GET',
-    headers: await createUnleashedHeaders(productsUrl, authData.apiKey, authData.apiId)
-  });
-  const productsData = await productsResponse.json();
-  const basicProducts = productsData.Items || [];
+  const allProducts = [];
+  let currentPage = 1;
+  let hasMorePages = true;
   
-  console.log(`📊 Found ${basicProducts.length} products, now fetching detailed data with AttributeSet...`);
-  
-  // Now fetch detailed product data for each product to get AttributeSet
-  const detailedProducts = [];
-  let processed = 0;
-  
-  for (const product of basicProducts.slice(0, 10)) { // Limit to first 10 for testing
-    try {
-      const detailUrl = `https://api.unleashedsoftware.com/Products/${product.Guid}`;
-      const detailResponse = await fetch(detailUrl, {
-        method: 'GET',
-        headers: await createUnleashedHeaders(detailUrl, authData.apiKey, authData.apiId)
-      });
-      
-      if (detailResponse.ok) {
-        const detailData = await detailResponse.json();
-        detailedProducts.push(detailData);
-        processed++;
-        
-        // Debug first product's AttributeSet data
-        if (processed === 1) {
-          console.log(`\n📊 DETAILED PRODUCT DATA DEBUG - Sample:`)
-          console.log(`   ProductCode: ${detailData.ProductCode}`);
-          console.log(`   ProductDescription: ${detailData.ProductDescription}`);
-          console.log(`   AttributeSet exists: ${!!detailData.AttributeSet}`);
-          if (detailData.AttributeSet) {
-            console.log(`   AttributeSet keys:`, Object.keys(detailData.AttributeSet));
-            console.log(`   Full AttributeSet:`, JSON.stringify(detailData.AttributeSet, null, 2));
-          } else {
-            console.log(`   ❌ Still no AttributeSet data in detailed view`);
-            console.log(`   Available detailed fields:`, Object.keys(detailData));
-          }
-        }
-      } else {
-        console.log(`⚠️  Failed to fetch details for ${product.ProductCode}: ${detailResponse.status}`);
-        detailedProducts.push(product); // Use basic data as fallback
-        processed++;
-      }
-    } catch (error) {
-      console.log(`⚠️  Error fetching details for ${product.ProductCode}:`, error.message);
-      detailedProducts.push(product); // Use basic data as fallback
-      processed++;
+  while (hasMorePages) {
+    const productsUrl = `https://api.unleashedsoftware.com/Products?pageSize=200&pageNumber=${currentPage}`;
+    console.log(`📄 Fetching page ${currentPage}...`);
+    
+    const productsResponse = await fetch(productsUrl, {
+      method: 'GET',
+      headers: await createUnleashedHeaders(productsUrl, authData.apiKey, authData.apiId)
+    });
+    
+    if (!productsResponse.ok) {
+      throw new Error(`Failed to fetch products page ${currentPage}: ${productsResponse.status} ${productsResponse.statusText}`);
     }
+    
+    const productsData = await productsResponse.json();
+    const products = productsData.Items || [];
+    
+    if (products.length === 0) {
+      hasMorePages = false;
+      break;
+    }
+    
+    // Debug first product's data structure on first page
+    if (currentPage === 1 && products.length > 0) {
+      console.log(`\n📊 PRODUCT DATA STRUCTURE DEBUG - Sample from bulk endpoint:`)
+      console.log(`   ProductCode: ${products[0].ProductCode}`);
+      console.log(`   ProductDescription: ${products[0].ProductDescription}`);
+      console.log(`   AttributeSet exists: ${!!products[0].AttributeSet}`);
+      console.log(`   Attributes exists: ${!!products[0].Attributes}`);
+      
+      if (products[0].AttributeSet) {
+        console.log(`   AttributeSet:`, typeof products[0].AttributeSet === 'string' ? products[0].AttributeSet : JSON.stringify(products[0].AttributeSet, null, 2));
+      }
+      
+      if (products[0].Attributes) {
+        console.log(`   Attributes:`, JSON.stringify(products[0].Attributes, null, 2));
+      }
+      
+      if (!products[0].AttributeSet && !products[0].Attributes) {
+        console.log(`   Available fields:`, Object.keys(products[0]));
+      }
+    }
+    
+    allProducts.push(...products);
+    
+    // Check if we have more pages
+    if (productsData.Pagination) {
+      const totalPages = productsData.Pagination.NumberOfPages || 1;
+      hasMorePages = currentPage < totalPages;
+      console.log(`📊 Page ${currentPage}/${totalPages} - Found ${products.length} products (Total so far: ${allProducts.length})`);
+    } else {
+      // If no pagination info, assume we got all products
+      hasMorePages = false;
+    }
+    
+    currentPage++;
     
     // Add small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   
-  console.log(`✅ Processed ${processed} products with detailed data`);
-  results.products = detailedProducts;
+  console.log(`✅ Retrieved ${allProducts.length} total products with AttributeSet data`);
+  results.products = allProducts;
 
   // Customers (company entities)
   const customersUrl = 'https://api.unleashedsoftware.com/Customers?pageSize=200&pageNumber=1';

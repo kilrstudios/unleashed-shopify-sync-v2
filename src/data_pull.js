@@ -35,8 +35,7 @@ async function generateSignature(queryString, apiKey) {
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
   const path = url.pathname;
-  const queryString = url.search ? url.search.substring(1) : '';
-  const signature = await generateSignature(`GET&${path}${queryString ? '?' + queryString : ''}`, apiKey);
+  const signature = await generateSignature(`GET&${path}`, apiKey);
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',

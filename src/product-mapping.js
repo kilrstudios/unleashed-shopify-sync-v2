@@ -278,26 +278,47 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             [{ name: 'Title' }],
           variants: group.map(product => {
             const variantOptions = extractVariantOptions(product.AttributeSet);
+            
+            // Calculate total stock on hand for each location
+            const inventoryQuantities = [];
+            if (product.StockOnHand && product.StockOnHand.length > 0) {
+              // Group stock by warehouse and sum quantities
+              const stockByWarehouse = product.StockOnHand.reduce((acc, stock) => {
+                const warehouseCode = stock.WarehouseCode || 'Unknown';
+                acc[warehouseCode] = (acc[warehouseCode] || 0) + parseInt(stock.QtyOnHand || 0);
+                return acc;
+              }, {});
+              
+              // Convert to inventoryQuantities format for productSet mutation
+              Object.entries(stockByWarehouse).forEach(([warehouseCode, quantity]) => {
+                inventoryQuantities.push({
+                  name: "available",
+                  quantity: quantity,
+                  locationId: `gid://shopify/Location/${warehouseCode}`
+                });
+              });
+            }
+            
             return {
-            sku: product.ProductCode,
-            title: isMultiVariant 
+              sku: product.ProductCode,
+              title: isMultiVariant 
                 ? generateVariantTitle(product.AttributeSet)
-              : 'Default Title',
-            price: product.DefaultSellPrice,
-            compare_at_price: null,
-            weight: product.Weight || 0,
-            weight_unit: 'g',
-            inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-            inventory_policy: 'deny',
+                : 'Default Title',
+              price: product.DefaultSellPrice,
+              compare_at_price: null,
+              weight: product.Weight || 0,
+              weight_unit: 'g',
+              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+              inventory_policy: 'deny',
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,
-              stock_on_hand: product.StockOnHand || [],
-            metafields: Array.from({ length: 10 }, (_, i) => ({
-              namespace: 'custom',
-              key: `price_tier_${i + 1}`,
-              value: product[`SellPriceTier${i + 1}`]?.Value || ''
-            }))
+              inventoryQuantities: inventoryQuantities,
+              metafields: Array.from({ length: 10 }, (_, i) => ({
+                namespace: 'custom',
+                key: `price_tier_${i + 1}`,
+                value: product[`SellPriceTier${i + 1}`]?.Value || ''
+              }))
             };
           })
         };

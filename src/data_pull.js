@@ -304,11 +304,11 @@ async function fetchShopifyData(authData) {
       productType: products[0].productType,
       vendor: products[0].vendor,
       options: products[0].options,
-      variants: products[0].variants.edges.map(edge => ({
-        id: edge.node.id,
-        sku: edge.node.sku,
-        price: edge.node.price,
-        inventoryItem: edge.node.inventoryItem
+      variants: products[0].variants.map(v => ({
+        id: v.id,
+        sku: v.sku,
+        price: v.price,
+        inventoryItem: v.inventoryItem
       }))
     }, null, 2));
   }

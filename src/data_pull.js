@@ -46,18 +46,19 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
 }
 
 // Fetch stock on hand for a product
-async function fetchStockOnHand(productCode) {
+async function fetchStockOnHand(productCode, authData) {
   try {
     console.log(`📦 Fetching stock on hand for product ${productCode}`);
     
-    const response = await fetch(`${UNLEASHED_API_URL}/StockOnHand/${productCode}`, {
+    const stockUrl = `https://api.unleashedsoftware.com/StockOnHand/${productCode}`;
+    console.log(`  🔗 Using URL: ${stockUrl}`);
+    
+    const headers = await createUnleashedHeaders(stockUrl, authData.unleashed.apiKey, authData.unleashed.apiId);
+    console.log(`  🔑 Headers prepared with API ID: ${authData.unleashed.apiId}`);
+    
+    const response = await fetch(stockUrl, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'api-auth-id': UNLEASHED_API_ID,
-        'api-auth-signature': generateSignature(`GET&/StockOnHand/${productCode}`)
-      }
+      headers
     });
 
     if (!response.ok) {
@@ -85,27 +86,40 @@ async function fetchStockOnHand(productCode) {
 }
 
 // Fetch attachments (images) for a product
-async function fetchProductAttachments(productId) {
+async function fetchProductAttachments(productCode, authData) {
   try {
-    const response = await fetch(`${UNLEASHED_API_URL}/Products/${productId}/Attachments`, {
+    console.log(`🖼️ Fetching attachments for product ${productCode}`);
+    
+    const attachmentsUrl = `https://api.unleashedsoftware.com/Products/${productCode}/Attachments`;
+    console.log(`  🔗 Using URL: ${attachmentsUrl}`);
+    
+    const headers = await createUnleashedHeaders(attachmentsUrl, authData.unleashed.apiKey, authData.unleashed.apiId);
+    console.log(`  🔑 Headers prepared with API ID: ${authData.unleashed.apiId}`);
+    
+    const response = await fetch(attachmentsUrl, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'api-auth-id': UNLEASHED_API_ID,
-        'api-auth-signature': generateSignature(`GET&/Products/${productId}/Attachments`)
-      }
+      headers
     });
 
     if (!response.ok) {
-      console.error(`❌ Error fetching attachments for product ${productId}: ${response.status} ${response.statusText}`);
+      console.error(`❌ Error fetching attachments for product ${productCode}: ${response.status} ${response.statusText}`);
       return [];
     }
 
     const data = await response.json();
-    return data.Items || [];
+    const items = data.Items || [];
+    
+    console.log(`📸 Attachments for product ${productCode}:`);
+    items.forEach(item => {
+      console.log(`  - File: ${item.FileName}`);
+      console.log(`    Type: ${item.FileType}`);
+      console.log(`    Description: ${item.Description || 'N/A'}`);
+      console.log(`    Download URL: ${item.DownloadUrl || 'N/A'}`);
+    });
+
+    return items;
   } catch (error) {
-    console.error(`❌ Error fetching attachments for product ${productId}:`, error);
+    console.error(`❌ Error fetching attachments for product ${productCode}:`, error);
     return [];
   }
 }
@@ -174,7 +188,7 @@ async function fetchUnleashedData(authData) {
         
         // Fetch attachments (images)
         console.log(`   🖼️ Fetching attachments for ${product.ProductCode}...`);
-        const attachments = await fetchProductAttachments(product.ProductCode);
+        const attachments = await fetchProductAttachments(product.ProductCode, authData);
         product.Attachments = attachments.filter(a => a.FileName.match(/\.(jpg|jpeg|png|gif)$/i));
         
         if (product.Attachments.length > 0) {

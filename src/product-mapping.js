@@ -200,31 +200,19 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
     errors: []
   };
 
-  // Debug: Log Shopify products for matching analysis
-  console.log(`\n🔍 === PRODUCT MATCHING DEBUG ===`);
-  console.log(`📊 Available Shopify products for matching: ${shopifyProducts.length}`);
-  if (shopifyProducts.length > 0) {
-    console.log(`📋 Existing Shopify product handles:`);
-    shopifyProducts.forEach((sp, i) => {
-      console.log(`   ${i + 1}. "${sp.title}" (handle: "${sp.handle}") - ${sp.variants?.length || 0} variants`);
-    });
-  } else {
-    console.log(`📋 No existing Shopify products found - all will be created`);
-  }
-
   try {
     // Group Unleashed products by AttributeSet.ProductTitle
     const productGroups = groupUnleashedProducts(unleashedProducts);
 
     // Process each group (or single product)
-    for (const group of productGroups) {
+    for (const [groupKey, group] of productGroups.entries()) {
       try {
         const mainProduct = group[0];
         const isMultiVariant = group.length > 1;
 
         // Generate handle based on grouping strategy
         const productTitle = isMultiVariant 
-          ? mainProduct.AttributeSet.ProductTitle 
+          ? getAttributeValue(mainProduct.AttributeSet, 'Product Title')
           : mainProduct.ProductDescription;
         const handle = slugify(productTitle);
 
@@ -245,9 +233,11 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           console.log(`   🆕 Will CREATE new product`);
         }
 
-        // Prepare variant options using the new AttributeSet structure
-        const variantOptions = extractVariantOptions(mainProduct.AttributeSet);
-        const productOptions = extractProductOptions(mainProduct.AttributeSet);
+        // Get option names from the first product with AttributeSet
+        const productWithOptions = group.find(p => p.AttributeSet && getAttributeValue(p.AttributeSet, 'Option Names'));
+        const optionNames = productWithOptions ? 
+          parseOptionNames(getAttributeValue(productWithOptions.AttributeSet, 'Option Names')) :
+          [];
 
         // Prepare product data
         const productData = {
@@ -264,88 +254,74 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           images: [{
             src: mainProduct.ImageUrl || (mainProduct.Images && mainProduct.Images[0]?.Url)
           }].filter(img => img.src),
+          options: isMultiVariant ? 
+            optionNames.map(name => ({ name })) :
+            [{ name: 'Title' }],
           variants: group.map(product => {
-            const productVariantOptions = extractVariantOptions(product.AttributeSet);
+            const variantOptions = extractVariantOptions(product.AttributeSet);
             return {
-            sku: product.ProductCode,
-            title: isMultiVariant 
+              sku: product.ProductCode,
+              title: isMultiVariant 
                 ? generateVariantTitle(product.AttributeSet)
-              : 'Default Title',
-            price: product.DefaultSellPrice,
-            compare_at_price: null,
-            weight: product.Weight || 0,
-            weight_unit: 'g',
-            inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-            inventory_policy: 'deny',
-              option1: productVariantOptions.option1,
-              option2: productVariantOptions.option2,
-              option3: productVariantOptions.option3,
-            metafields: Array.from({ length: 10 }, (_, i) => ({
-              namespace: 'custom',
-              key: `price_tier_${i + 1}`,
-              value: product[`SellPriceTier${i + 1}`]?.Value || ''
-            }))
+                : 'Default Title',
+              price: product.DefaultSellPrice,
+              compare_at_price: null,
+              weight: product.Weight || 0,
+              weight_unit: 'g',
+              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+              inventory_policy: 'deny',
+              option1: variantOptions.option1,
+              option2: variantOptions.option2,
+              option3: variantOptions.option3,
+              metafields: Array.from({ length: 10 }, (_, i) => ({
+                namespace: 'custom',
+                key: `price_tier_${i + 1}`,
+                value: product[`SellPriceTier${i + 1}`]?.Value || ''
+              }))
             };
-          }),
-          options: productOptions
+          })
         };
 
         if (matchingProduct) {
-          // Debug: Log existing product SKUs
+          // Verify SKU connection
           console.log(`   📦 Existing Shopify product variants:`);
           matchingProduct.variants.forEach((v, i) => {
             console.log(`      ${i + 1}. SKU: "${v.sku}", Title: "${v.title}"`);
           });
-          
           console.log(`   📦 Unleashed products in group:`);
           group.forEach((p, i) => {
             console.log(`      ${i + 1}. ProductCode: "${p.ProductCode}", Description: "${p.ProductDescription}"`);
           });
 
-          // Verify SKU connection
-          const skusMatch = isMultiVariant
-            ? group.some(p => matchingProduct.variants.some(v => v.sku === p.ProductCode))
-            : matchingProduct.variants[0]?.sku === mainProduct.ProductCode;
-
-          console.log(`   🔗 SKU verification: ${skusMatch ? 'MATCH' : 'NO MATCH'}`);
+          // Check if all SKUs match
+          const shopifySkus = new Set(matchingProduct.variants.map(v => v.sku));
+          const unleashedSkus = new Set(group.map(p => p.ProductCode));
+          const skusMatch = [...shopifySkus].every(sku => unleashedSkus.has(sku)) &&
+                          [...unleashedSkus].every(sku => shopifySkus.has(sku));
 
           if (skusMatch) {
-            // Check if product data has actually changed
-            const comparison = compareProductData(productData, matchingProduct);
+            console.log(`   🔗 SKU verification: MATCH`);
             
-            if (comparison.hasChanges) {
-              // Update existing product (has changes)
-              console.log(`   🔄 Will UPDATE existing product (changes detected):`);
-              comparison.differences.forEach(diff => {
-                console.log(`      📝 ${diff}`);
-              });
-              
-            productData.id = matchingProduct.id;
-            productData.variants = productData.variants.map(v => {
-              const matchingVariant = matchingProduct.variants.find(mv => mv.sku === v.sku);
-                if (matchingVariant) {
-                  console.log(`      🔗 Variant SKU "${v.sku}" matched to existing variant ID: ${matchingVariant.id}`);
-                  v.id = matchingVariant.id;
-                }
-              return v;
-            });
-            results.toUpdate.push(productData);
+            // Compare data to check if update is needed
+            const differences = compareProductData(productData, matchingProduct);
+            if (differences.length > 0) {
+              console.log(`   🔄 Changes detected - will UPDATE product:`);
+              differences.forEach(diff => console.log(`      - ${diff}`));
+              productData.id = matchingProduct.id;
+              results.toUpdate.push(productData);
             } else {
-              // Product is identical - skip update
               console.log(`   ✅ Product is IDENTICAL to existing Shopify product - SKIPPING update`);
               console.log(`   📊 No changes detected between Unleashed and Shopify data`);
               results.skipped.push({
-                title: productData.title,
-                handle: productData.handle,
+                title: matchingProduct.title,
                 id: matchingProduct.id,
-                variantCount: productData.variants.length,
+                variantCount: matchingProduct.variants.length,
                 reason: 'identical_data'
               });
             }
           } else {
-            // Create new product with modified handle
-            console.log(`   🆕 Will CREATE new product with modified handle (handle match but SKU mismatch)`);
-            productData.handle = `${handle}-${mainProduct.ProductCode}`;
+            console.log(`   ❌ SKU verification FAILED - will CREATE new product with modified handle`);
+            productData.handle = `${handle}-${Date.now()}`;
             results.toCreate.push(productData);
           }
         } else {
@@ -356,6 +332,7 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
 
         results.processed++;
       } catch (error) {
+        console.error(`Error processing group ${groupKey}:`, error);
         results.errors.push({
           productCode: group[0].ProductCode,
           error: error.message
@@ -363,10 +340,14 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
       }
     }
 
-    // Find Shopify products to archive (products in Shopify but not in Unleashed)
-    const unleashedHandles = new Set(productGroups.map(group => 
-      slugify(group[0].AttributeSet?.ProductTitle || group[0].ProductDescription)
-    ));
+    // Find Shopify products to archive
+    const unleashedHandles = new Set(Array.from(productGroups.entries()).map(([_, group]) => {
+      const mainProduct = group[0];
+      const productTitle = group.length > 1 
+        ? getAttributeValue(mainProduct.AttributeSet, 'Product Title')
+        : mainProduct.ProductDescription;
+      return slugify(productTitle);
+    }));
     
     const productsToArchive = shopifyProducts
       .filter(sp => !sp.status.includes('ARCHIVED') && !unleashedHandles.has(sp.handle))
@@ -404,11 +385,11 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
     console.log(`🗂️ Products to ARCHIVE: ${results.toArchive.length}`);
     console.log(`❌ Errors: ${results.errors.length}`);
 
+    return results;
   } catch (error) {
-    throw new Error(`Product mapping failed: ${error.message}`);
+    console.error('Error in mapProducts:', error);
+    throw error;
   }
-
-  return results;
 }
 
 export {

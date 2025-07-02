@@ -276,4 +276,93 @@ export async function handleProductSync(request, env) {
       details: error.stack 
     }, 500);
   }
+}
+
+async function handleProductMutations(shopifyClient, mappingResults) {
+  const results = {
+    created: 0,
+    updated: 0,
+    archived: 0,
+    errors: 0
+  };
+
+  try {
+    console.log(`🔄 Using direct mutations for ${mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length} operations`);
+    console.log(`🚀 === STARTING DIRECT PRODUCT MUTATIONS ===`);
+
+    // Create new products
+    if (mappingResults.toCreate.length > 0) {
+      console.log(`🆕 Creating ${mappingResults.toCreate.length} new products...`);
+      for (const productData of mappingResults.toCreate) {
+        try {
+          const response = await createProduct(shopifyClient, productData);
+          if (response.userErrors.length > 0) {
+            console.error(`❌ Failed to create product "${productData.title}":`, response.userErrors);
+            results.errors++;
+          } else {
+            console.log(`✅ Created product: ${productData.title}`);
+            results.created++;
+          }
+        } catch (error) {
+          console.error(`❌ Error creating product "${productData.title}":`, error);
+          results.errors++;
+        }
+      }
+    }
+
+    // Update existing products
+    if (mappingResults.toUpdate.length > 0) {
+      console.log(`🔄 Updating ${mappingResults.toUpdate.length} existing products...`);
+      for (const productData of mappingResults.toUpdate) {
+        try {
+          const response = await updateProduct(shopifyClient, productData);
+          if (response.userErrors.length > 0) {
+            console.error(`❌ Failed to update product "${productData.title}":`, response.userErrors);
+            results.errors++;
+          } else {
+            console.log(`✅ Updated product: ${productData.title}`);
+            results.updated++;
+          }
+        } catch (error) {
+          console.error(`❌ Error updating product "${productData.title}":`, error);
+          results.errors++;
+        }
+      }
+    }
+
+    // Archive products
+    if (mappingResults.toArchive.length > 0) {
+      console.log(`🗄️ Archiving ${mappingResults.toArchive.length} products...`);
+      console.log(`🗄️ Starting archival of ${mappingResults.toArchive.length} products...`);
+      
+      for (const productData of mappingResults.toArchive) {
+        try {
+          const response = await updateProduct(shopifyClient, {
+            id: productData.id,
+            status: 'ARCHIVED'
+          });
+          
+          if (response.userErrors.length > 0) {
+            console.error(`❌ Failed to archive product:`, response.userErrors);
+            results.errors++;
+          } else {
+            console.log(`✅ Archived product: ${response.product.title}`);
+            results.archived++;
+          }
+        } catch (error) {
+          console.error(`❌ Error archiving product:`, error);
+          results.errors++;
+        }
+      }
+      console.log(`✅ Product archival completed: ${results.archived} successful, ${results.errors} failed`);
+    }
+
+    console.log(`✅ === DIRECT PRODUCT MUTATIONS COMPLETE ===`);
+    console.log(`✅ Product sync completed: Products: ${results.created} created, ${results.updated} updated, ${results.archived} archived (direct). Errors: ${results.errors}`);
+
+    return results;
+  } catch (error) {
+    console.error('Error in handleProductMutations:', error);
+    throw error;
+  }
 } 

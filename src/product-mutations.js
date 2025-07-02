@@ -46,6 +46,11 @@ function generateVariantTitle(attributeSet) {
   return values.join(' / ');
 }
 
+function parseOptionNames(optionNamesStr) {
+  if (!optionNamesStr) return [];
+  return optionNamesStr.split(/[|,]/).map(name => name.trim()).filter(Boolean);
+}
+
 // Build productSet input for bulk operation
 function buildProductSetInput(productData, isUpdate = false) {
   // Determine if this is a single-variant product with default options only
@@ -1153,6 +1158,113 @@ async function handleImageUpdate(request, env) {
       success: false,
       error: error.message
     }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
+}
+
+async function createProduct(shopifyClient, productData) {
+  try {
+    const mutation = `
+      mutation productCreate($input: ProductInput!) {
+        productCreate(input: $input) {
+          product {
+            id
+            title
+            handle
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  sku
+                  title
+                }
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      input: {
+        ...productData,
+        variants: productData.variants.map(variant => ({
+          ...variant,
+          inventoryItem: {
+            tracked: variant.inventory_management === 'shopify'
+          }
+        }))
+      }
+    };
+
+    const response = await shopifyClient.request(mutation, variables);
+    return response.productCreate;
+  } catch (error) {
+    console.error('Error creating product:', error);
+    throw error;
+  }
+}
+
+async function updateProduct(shopifyClient, productData) {
+  try {
+    // First, get the existing variants to map IDs
+    const existingProduct = await getProductById(shopifyClient, productData.id);
+    const existingVariants = existingProduct.variants.edges.map(edge => edge.node);
+
+    // Map variant IDs
+    productData.variants = productData.variants.map(variant => {
+      const existingVariant = existingVariants.find(ev => ev.sku === variant.sku);
+      if (existingVariant) {
+        variant.id = existingVariant.id;
+      }
+      return variant;
+    });
+
+    const mutation = `
+      mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product {
+            id
+            title
+            handle
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  sku
+                  title
+                }
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      input: {
+        ...productData,
+        variants: productData.variants.map(variant => ({
+          ...variant,
+          inventoryItem: {
+            tracked: variant.inventory_management === 'shopify'
+          }
+        }))
+      }
+    };
+
+    const response = await shopifyClient.request(mutation, variables);
+    return response.productUpdate;
+  } catch (error) {
+    console.error('Error updating product:', error);
+    throw error;
   }
 }
 

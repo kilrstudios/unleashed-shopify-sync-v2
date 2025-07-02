@@ -372,8 +372,26 @@
     // Log initial data pulled from Unleashed & Shopify
     function logInitialData(data) {
         if (!data) return;
-        const unleashed = data.unleashed || data.unleashedData || data.unleashed_products || null;
-        const shopify = data.shopify || data.shopifyData || data.shopify_products || null;
+        // Attempt to locate Unleashed & Shopify blocks in common locations
+        const unleashed = data.unleashed ||
+                         data.unleashedData ||
+                         data.unleashed_products ||
+                         (data.steps && data.steps.dataFetch && data.steps.dataFetch.data && data.steps.dataFetch.data.unleashed) ||
+                         null;
+
+        const shopify = data.shopify ||
+                        data.shopifyData ||
+                        data.shopify_products ||
+                        (data.steps && data.steps.dataFetch && data.steps.dataFetch.data && data.steps.dataFetch.data.shopify) ||
+                        null;
+
+        // If neither found, log entire payload for inspection
+        if (!unleashed && !shopify) {
+            console.group('%c📥 Raw Sync Response (unparsed)', 'color: #FF9800; font-weight: bold');
+            console.dir(data, { depth: null });
+            console.groupEnd();
+            return;
+        }
 
         console.group('%c📥 Initial Data Pulled', 'color: #FF9800; font-weight: bold');
         if (unleashed) {

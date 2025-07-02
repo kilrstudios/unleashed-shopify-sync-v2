@@ -515,17 +515,6 @@ async function pullAllData(domain, env) {
     fetchShopifyData(authData.shopify)
   ]);
 
-  // DEBUG: Log full Unleashed raw data for inspection (may be large)
-  try {
-    console.log('📝 RAW UNLEASHED DATA START =================================');
-    console.log(JSON.stringify(unleashedData, null, 2));
-    console.log('📝 RAW UNLEASHED DATA END ===================================');
-  } catch (logError) {
-    console.warn('⚠️ Failed to log full Unleashed data:', logError.message);
-  }
-
-  // (Optional) Still log small Shopify sample to compare if needed
-
   return {
     unleashed: unleashedData,
     shopify: shopifyData

@@ -46,19 +46,42 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
 }
 
 // Fetch stock on hand for a product
-async function fetchStockOnHand(productCode, authData) {
-  const stockUrl = `https://api.unleashedsoftware.com/StockOnHand?productCode=${productCode}`;
-  const response = await fetch(stockUrl, {
-    method: 'GET',
-    headers: await createUnleashedHeaders(stockUrl, authData.apiKey, authData.apiId)
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Failed to fetch stock for ${productCode}: ${response.status} ${response.statusText}`);
+async function fetchStockOnHand(productCode) {
+  try {
+    console.log(`📦 Fetching stock on hand for product ${productCode}`);
+    
+    const response = await fetch(`${UNLEASHED_API_URL}/StockOnHand/${productCode}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'api-auth-id': UNLEASHED_API_ID,
+        'api-auth-signature': generateSignature(`GET&/StockOnHand/${productCode}`)
+      }
+    });
+
+    if (!response.ok) {
+      console.error(`❌ Error fetching stock for product ${productCode}: ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const items = data.Items || [];
+    
+    console.log(`📊 Stock levels for product ${productCode}:`);
+    items.forEach(item => {
+      console.log(`  - Warehouse: ${item.WarehouseCode}`);
+      console.log(`    Available: ${item.QuantityAvailable}`);
+      console.log(`    On Hand: ${item.QtyOnHand}`);
+      console.log(`    Allocated: ${item.QtyAllocated}`);
+      console.log(`    In Transit: ${item.QtyInTransit}`);
+    });
+
+    return items;
+  } catch (error) {
+    console.error(`❌ Error fetching stock for product ${productCode}:`, error);
+    return [];
   }
-  
-  const data = await response.json();
-  return data.Items || [];
 }
 
 // Fetch attachments (images) for a product

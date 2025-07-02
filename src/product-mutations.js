@@ -75,18 +75,17 @@ function buildProductSetInput(productData, isUpdate = false) {
         variantInput.id = variant.id;
       }
 
-      // Skip metafields for now to avoid type conflicts
-      // TODO: Re-enable after metafield definitions are created correctly
-      // if (variant.metafields && variant.metafields.length > 0) {
-      //   variantInput.metafields = variant.metafields
-      //     .filter(mf => mf.value && mf.value.toString().trim() !== '')
-      //     .map(mf => ({
-      //       namespace: mf.namespace,
-      //       key: mf.key,
-      //       value: mf.value.toString(),
-      //       type: 'single_line_text_field'
-      //     }));
-      // }
+      // Add metafields for price tiers
+      if (variant.metafields && variant.metafields.length > 0) {
+        variantInput.metafields = variant.metafields
+          .filter(mf => mf.value && mf.value.toString().trim() !== '')
+          .map(mf => ({
+            namespace: mf.namespace,
+            key: mf.key,
+            value: mf.value.toString(),
+            type: 'money'  // Using money type - user will update Shopify metafield definitions
+          }));
+      }
 
       // Always add optionValues - Shopify requires this field for productSet API
       if (isSingleVariantDefault) {

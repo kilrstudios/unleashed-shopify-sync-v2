@@ -101,6 +101,18 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
     errors: []
   };
 
+  // Debug: Log Shopify products for matching analysis
+  console.log(`\n🔍 === PRODUCT MATCHING DEBUG ===`);
+  console.log(`📊 Available Shopify products for matching: ${shopifyProducts.length}`);
+  if (shopifyProducts.length > 0) {
+    console.log(`📋 Existing Shopify product handles:`);
+    shopifyProducts.forEach((sp, i) => {
+      console.log(`   ${i + 1}. "${sp.title}" (handle: "${sp.handle}") - ${sp.variants?.length || 0} variants`);
+    });
+  } else {
+    console.log(`📋 No existing Shopify products found - all will be created`);
+  }
+
   try {
     // Group Unleashed products by AttributeSet.ProductTitle
     const productGroups = groupUnleashedProducts(unleashedProducts);
@@ -117,8 +129,22 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           : mainProduct.ProductDescription;
         const handle = slugify(productTitle);
 
+        // Debug: Log handle generation and matching attempt
+        console.log(`\n🔍 Processing "${productTitle}"`);
+        console.log(`   📝 Generated handle: "${handle}"`);
+        console.log(`   📊 Is multi-variant: ${isMultiVariant} (${group.length} products in group)`);
+        console.log(`   🎯 Searching for existing Shopify product with handle: "${handle}"`);
+
         // Find matching Shopify product
         const matchingProduct = shopifyProducts.find(sp => sp.handle === handle);
+        
+        if (matchingProduct) {
+          console.log(`   ✅ MATCH FOUND: "${matchingProduct.title}" (ID: ${matchingProduct.id})`);
+          console.log(`   🔍 Will verify SKU connection...`);
+        } else {
+          console.log(`   ❌ NO MATCH: Handle "${handle}" not found in existing Shopify products`);
+          console.log(`   🆕 Will CREATE new product`);
+        }
 
         // Prepare variant options using the new AttributeSet structure
         const variantOptions = extractVariantOptions(mainProduct.AttributeSet);
@@ -166,27 +192,46 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
         };
 
         if (matchingProduct) {
+          // Debug: Log existing product SKUs
+          console.log(`   📦 Existing Shopify product variants:`);
+          matchingProduct.variants.forEach((v, i) => {
+            console.log(`      ${i + 1}. SKU: "${v.sku}", Title: "${v.title}"`);
+          });
+          
+          console.log(`   📦 Unleashed products in group:`);
+          group.forEach((p, i) => {
+            console.log(`      ${i + 1}. ProductCode: "${p.ProductCode}", Description: "${p.ProductDescription}"`);
+          });
+
           // Verify SKU connection
           const skusMatch = isMultiVariant
             ? group.some(p => matchingProduct.variants.some(v => v.sku === p.ProductCode))
             : matchingProduct.variants[0]?.sku === mainProduct.ProductCode;
 
+          console.log(`   🔗 SKU verification: ${skusMatch ? 'MATCH' : 'NO MATCH'}`);
+
           if (skusMatch) {
             // Update existing product
+            console.log(`   🔄 Will UPDATE existing product (handle + SKU match)`);
             productData.id = matchingProduct.id;
             productData.variants = productData.variants.map(v => {
               const matchingVariant = matchingProduct.variants.find(mv => mv.sku === v.sku);
-              if (matchingVariant) v.id = matchingVariant.id;
+              if (matchingVariant) {
+                console.log(`      🔗 Variant SKU "${v.sku}" matched to existing variant ID: ${matchingVariant.id}`);
+                v.id = matchingVariant.id;
+              }
               return v;
             });
             results.toUpdate.push(productData);
           } else {
             // Create new product with modified handle
+            console.log(`   🆕 Will CREATE new product with modified handle (handle match but SKU mismatch)`);
             productData.handle = `${handle}-${mainProduct.ProductCode}`;
             results.toCreate.push(productData);
           }
         } else {
           // Create new product
+          console.log(`   🆕 Will CREATE new product (no handle match)`);
           results.toCreate.push(productData);
         }
 
@@ -212,6 +257,26 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
       }));
 
     results.toArchive.push(...productsToArchive);
+
+    // Debug: Final mapping summary
+    console.log(`\n🎯 === PRODUCT MAPPING SUMMARY ===`);
+    console.log(`📊 Total processed: ${results.processed}`);
+    console.log(`🆕 Products to CREATE: ${results.toCreate.length}`);
+    if (results.toCreate.length > 0) {
+      console.log(`   CREATE list:`);
+      results.toCreate.forEach((p, i) => {
+        console.log(`      ${i + 1}. "${p.title}" (handle: "${p.handle}") - ${p.variants.length} variants`);
+      });
+    }
+    console.log(`🔄 Products to UPDATE: ${results.toUpdate.length}`);
+    if (results.toUpdate.length > 0) {
+      console.log(`   UPDATE list:`);
+      results.toUpdate.forEach((p, i) => {
+        console.log(`      ${i + 1}. "${p.title}" (ID: ${p.id}) - ${p.variants.length} variants`);
+      });
+    }
+    console.log(`🗂️ Products to ARCHIVE: ${results.toArchive.length}`);
+    console.log(`❌ Errors: ${results.errors.length}`);
 
   } catch (error) {
     throw new Error(`Product mapping failed: ${error.message}`);

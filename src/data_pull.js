@@ -27,13 +27,12 @@ async function getAuthData(kvStore, domain) {
 }
 
 // Helper: Generate HMAC-SHA256 signature for Unleashed API authentication
-async function generateSignature(requestPath, apiKey) {
+async function generateSignature(queryString, apiKey) {
   const encoder = new TextEncoder();
   const keyBuffer = encoder.encode(apiKey);
-  // The signature should be generated from "GET&" + requestPath
-  const signatureData = `GET&${requestPath}`;
-  console.log('  🔐 Final signature input:', signatureData);
-  const dataBuffer = encoder.encode(signatureData);
+  // According to the official docs, only the query string is used for signature
+  console.log('  🔐 Final signature input:', queryString);
+  const dataBuffer = encoder.encode(queryString);
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
     keyBuffer,
@@ -49,23 +48,16 @@ async function generateSignature(requestPath, apiKey) {
 // Helper: Create headers for Unleashed API requests
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
-  const path = url.pathname;
   const queryString = url.search ? url.search.substring(1) : '';
   console.log('  🔗 URL parts:', {
     full: endpoint,
-    path,
+    path: url.pathname,
     queryString
   });
   
-  // The signature should be generated from the URL-encoded path and query string
-  const signatureInput = queryString 
-    ? `${path}?${queryString.split('&').map(param => {
-        const [key, value] = param.split('=');
-        return `${encodeURIComponent(key)}=${encodeURIComponent(value || '')}`;
-      }).join('&')}`
-    : path;
-  console.log('  🔐 Generating signature with input:', signatureInput);
-  const signature = await generateSignature(signatureInput, apiKey);
+  // According to Unleashed docs, the signature is generated from just the query string
+  console.log('  🔐 Generating signature with input:', queryString);
+  const signature = await generateSignature(queryString, apiKey);
   console.log('  🔑 Generated signature:', signature);
   
   const headers = {
@@ -75,7 +67,8 @@ async function createUnleashedHeaders(endpoint, apiKey, apiId) {
     'api-auth-signature': signature,
     'Client-Type': 'kilr/unleashedshopify'
   };
-  console.log('  📤 Request headers:', headers);
+  
+  console.log('  📤 Request headers:', JSON.stringify(headers, null, 2));
   return headers;
 }
 

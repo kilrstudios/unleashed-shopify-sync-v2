@@ -261,6 +261,7 @@ export async function handleComprehensiveSync(request, env) {
             toCreate: productMappingResults.toCreate.length,
             toUpdate: productMappingResults.toUpdate.length,
             toArchive: productMappingResults.toArchive.length,
+            skipped: productMappingResults.skipped?.length || 0,
             errors: productMappingResults.errors.length,
             processed: productMappingResults.processed
           },

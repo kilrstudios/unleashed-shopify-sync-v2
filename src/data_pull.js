@@ -15,7 +15,7 @@ async function getAuthData(kvStore, domain) {
 }
 
 // Helper: Generate HMAC-SHA256 signature for Unleashed API authentication
-async function generateUnleashedSignature(queryString, apiKey) {
+async function generateSignature(queryString, apiKey) {
   const encoder = new TextEncoder();
   const keyBuffer = encoder.encode(apiKey);
   const dataBuffer = encoder.encode(queryString);
@@ -35,7 +35,7 @@ async function generateUnleashedSignature(queryString, apiKey) {
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
   const queryString = url.search ? url.search.substring(1) : '';
-  const signature = await generateUnleashedSignature(queryString, apiKey);
+  const signature = await generateSignature(queryString, apiKey);
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -53,8 +53,23 @@ async function fetchStockOnHand(productCode, authData) {
     const stockUrl = `https://api.unleashedsoftware.com/StockOnHand/${productCode}`;
     console.log(`  🔗 Using URL: ${stockUrl}`);
     
-    const headers = await createUnleashedHeaders(stockUrl, authData.unleashed.apiKey, authData.unleashed.apiId);
-    console.log(`  🔑 Headers prepared with API ID: ${authData.unleashed.apiId}`);
+    // Log auth data structure to debug
+    console.log('  🔑 Auth data structure:', JSON.stringify({
+      hasUnleashed: true,
+      apiKeyExists: !!authData?.apiKey,
+      apiIdExists: !!authData?.apiId
+    }));
+
+    if (!authData?.apiKey || !authData?.apiId) {
+      throw new Error('Missing Unleashed API credentials');
+    }
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'api-auth-id': authData.apiId,
+      'api-auth-signature': await generateSignature(`GET&/StockOnHand/${productCode}`, authData.apiKey)
+    };
     
     const response = await fetch(stockUrl, {
       method: 'GET',
@@ -93,8 +108,23 @@ async function fetchProductAttachments(productCode, authData) {
     const attachmentsUrl = `https://api.unleashedsoftware.com/Products/${productCode}/Attachments`;
     console.log(`  🔗 Using URL: ${attachmentsUrl}`);
     
-    const headers = await createUnleashedHeaders(attachmentsUrl, authData.unleashed.apiKey, authData.unleashed.apiId);
-    console.log(`  🔑 Headers prepared with API ID: ${authData.unleashed.apiId}`);
+    // Log auth data structure to debug
+    console.log('  🔑 Auth data structure:', JSON.stringify({
+      hasUnleashed: true,
+      apiKeyExists: !!authData?.apiKey,
+      apiIdExists: !!authData?.apiId
+    }));
+
+    if (!authData?.apiKey || !authData?.apiId) {
+      throw new Error('Missing Unleashed API credentials');
+    }
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'api-auth-id': authData.apiId,
+      'api-auth-signature': await generateSignature(`GET&/Products/${productCode}/Attachments`, authData.apiKey)
+    };
     
     const response = await fetch(attachmentsUrl, {
       method: 'GET',

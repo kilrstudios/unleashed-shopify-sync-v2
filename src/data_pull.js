@@ -62,19 +62,29 @@ async function fetchStockOnHand(productCode, authData) {
 }
 
 // Fetch attachments (images) for a product
-async function fetchProductAttachments(productCode, authData) {
-  const attachmentsUrl = `https://api.unleashedsoftware.com/Attachments?productCode=${productCode}`;
-  const response = await fetch(attachmentsUrl, {
-    method: 'GET',
-    headers: await createUnleashedHeaders(attachmentsUrl, authData.apiKey, authData.apiId)
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Failed to fetch attachments for ${productCode}: ${response.status} ${response.statusText}`);
+async function fetchProductAttachments(productId) {
+  try {
+    const response = await fetch(`${UNLEASHED_API_URL}/Products/${productId}/Attachments`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'api-auth-id': UNLEASHED_API_ID,
+        'api-auth-signature': generateSignature(`GET&/Products/${productId}/Attachments`)
+      }
+    });
+
+    if (!response.ok) {
+      console.error(`❌ Error fetching attachments for product ${productId}: ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.Items || [];
+  } catch (error) {
+    console.error(`❌ Error fetching attachments for product ${productId}:`, error);
+    return [];
   }
-  
-  const data = await response.json();
-  return data.Items || [];
 }
 
 // Fetch Unleashed data
@@ -141,7 +151,7 @@ async function fetchUnleashedData(authData) {
         
         // Fetch attachments (images)
         console.log(`   🖼️ Fetching attachments for ${product.ProductCode}...`);
-        const attachments = await fetchProductAttachments(product.ProductCode, authData);
+        const attachments = await fetchProductAttachments(product.ProductCode);
         product.Attachments = attachments.filter(a => a.FileName.match(/\.(jpg|jpeg|png|gif)$/i));
         
         if (product.Attachments.length > 0) {
@@ -428,7 +438,7 @@ async function fetchShopifyLocations(baseUrl, headers) {
               zip
               phone
             }
-            metafields(first: 10, keys: ["custom.warehouse_code"]) {
+            metafields(first: 10, namespace: "custom") {
               edges {
                 node {
                   id

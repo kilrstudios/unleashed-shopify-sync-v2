@@ -279,7 +279,7 @@ async function handleInventoryUpdate(request, env) {
     const { accessToken } = authData.shopify;
     
     // Use shopify domain for API calls
-    const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+    const baseUrl = `https://${shopDomain}/admin/api/2024-01`;
     const headers = {
       'Content-Type': 'application/json',
       'X-Shopify-Access-Token': accessToken
@@ -290,81 +290,60 @@ async function handleInventoryUpdate(request, env) {
     
     for (const variant of variants) {
       try {
-        // First get the inventory item ID
-        const query = `
-          query getInventoryItemId($variantId: ID!) {
-            productVariant(id: $variantId) {
-              inventoryItem {
-                id
-              }
-            }
-          }
-        `;
-
-        const response = await fetch(`${baseUrl}/graphql.json`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            query,
-            variables: {
-              variantId: variant.id
-            }
-          })
-        });
-
-        const data = await response.json();
+        console.log(`  📝 Processing variant ${variant.id} with inventory item ${variant.inventoryItemId}`);
         
-        if (data.errors || !data.data.productVariant?.inventoryItem?.id) {
-          throw new Error(`Failed to get inventory item ID: ${JSON.stringify(data.errors || 'No inventory item found')}`);
+        // Get locations with their inventory levels
+        const locationsResponse = await fetch(`${baseUrl}/inventory_levels.json?inventory_item_ids=${variant.inventoryItemId}`, {
+          method: 'GET',
+          headers
+        });
+        
+        if (!locationsResponse.ok) {
+          throw new Error(`Failed to get inventory levels: ${locationsResponse.status} ${locationsResponse.statusText}`);
         }
 
-        const inventoryItemId = data.data.productVariant.inventoryItem.id;
+        const { inventory_levels } = await locationsResponse.json();
+        console.log(`  📊 Current inventory levels:`, inventory_levels);
 
-        // Now update the inventory level
-        const mutation = `
-          mutation inventoryAdjustQuantity($input: InventoryAdjustQuantityInput!) {
-            inventoryAdjustQuantity(input: $input) {
-              inventoryLevel {
-                id
-                available
-              }
-              userErrors {
-                field
-                message
-              }
-            }
+        // Update inventory for each location
+        for (const level of inventory_levels) {
+          const { location_id, available } = level;
+          const desiredQuantity = variant.quantities[location_id] || 0;
+          
+          if (available === desiredQuantity) {
+            console.log(`  ✓ Location ${location_id} already at correct quantity (${available})`);
+            continue;
           }
-        `;
 
-        const updateResponse = await fetch(`${baseUrl}/graphql.json`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            query: mutation,
-            variables: {
-              input: {
-                inventoryLevelId: variant.inventoryLevelId,
-                availableDelta: variant.quantityDelta
+          console.log(`  🔄 Updating location ${location_id} from ${available} to ${desiredQuantity}`);
+          
+          const adjustmentResponse = await fetch(`${baseUrl}/inventory_levels/adjust.json`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              inventory_level: {
+                inventory_item_id: variant.inventoryItemId,
+                location_id: location_id,
+                available_adjustment: desiredQuantity - available
               }
-            }
-          })
-        });
+            })
+          });
 
-        const updateData = await updateResponse.json();
-        
-        if (updateData.errors || updateData.data.inventoryAdjustQuantity.userErrors.length > 0) {
-          throw new Error(`Inventory update failed: ${JSON.stringify(updateData.errors || updateData.data.inventoryAdjustQuantity.userErrors)}`);
+          if (!adjustmentResponse.ok) {
+            throw new Error(`Failed to adjust inventory: ${adjustmentResponse.status} ${adjustmentResponse.statusText}`);
+          }
+
+          const adjustmentResult = await adjustmentResponse.json();
+          console.log(`  ✅ Successfully updated inventory for location ${location_id}:`, adjustmentResult);
+          results.successful.push({
+            variantId: variant.id,
+            locationId: location_id,
+            oldQuantity: available,
+            newQuantity: desiredQuantity
+          });
         }
-
-        results.successful.push({
-          variantId: variant.id,
-          newQuantity: updateData.data.inventoryAdjustQuantity.inventoryLevel.available
-        });
-
-        console.log(`✅ Updated inventory for variant ${variant.id}`);
-
       } catch (error) {
-        console.error(`❌ Failed to update inventory for variant ${variant.id}:`, error.message);
+        console.error(`  ❌ Error updating inventory for variant ${variant.id}:`, error);
         results.failed.push({
           variantId: variant.id,
           error: error.message
@@ -372,18 +351,16 @@ async function handleInventoryUpdate(request, env) {
       }
     }
 
-    return new Response(JSON.stringify({
-      success: true,
-      results,
-      summary: `${results.successful.length} successful, ${results.failed.length} failed`
-    }), { headers: { 'Content-Type': 'application/json' } });
-
+    return new Response(JSON.stringify(results), {
+      status: results.failed.length === 0 ? 200 : 207,
+      headers: { 'Content-Type': 'application/json' }
+    });
   } catch (error) {
-    console.error('❌ Inventory update handler failed:', error);
-    return new Response(JSON.stringify({
-      success: false,
-      error: error.message
-    }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    console.error('❌ Error in handleInventoryUpdate:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
 

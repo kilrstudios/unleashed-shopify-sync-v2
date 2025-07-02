@@ -1,8 +1,45 @@
 import { slugify } from './helpers.js';
 
-function generateVariantTitle(options) {
-  if (!options || !options.length) return 'Default Title';
-  return options.map(opt => opt.value).join(' / ');
+function parseOptionNames(optionNamesString) {
+  if (!optionNamesString) return [];
+  // Split by comma or pipe and clean up whitespace
+  return optionNamesString.split(/[,|]/).map(name => name.trim()).filter(Boolean);
+}
+
+function generateVariantTitle(attributeSet) {
+  if (!attributeSet) return 'Default Title';
+  
+  const values = [
+    attributeSet['Option 1 Value'],
+    attributeSet['Option 2 Value'], 
+    attributeSet['Option 3 Value']
+  ].filter(Boolean);
+  
+  if (!values.length) return 'Default Title';
+  return values.join(' / ');
+}
+
+function extractVariantOptions(attributeSet) {
+  if (!attributeSet) return { option1: null, option2: null, option3: null };
+  
+  return {
+    option1: attributeSet['Option 1 Value'] || null,
+    option2: attributeSet['Option 2 Value'] || null,
+    option3: attributeSet['Option 3 Value'] || null
+  };
+}
+
+function extractProductOptions(attributeSet) {
+  if (!attributeSet || !attributeSet['Option Names']) {
+    return [{ name: 'Title' }];
+  }
+  
+  const optionNames = parseOptionNames(attributeSet['Option Names']);
+  if (!optionNames.length) {
+    return [{ name: 'Title' }];
+  }
+  
+  return optionNames.slice(0, 3).map(name => ({ name }));
 }
 
 function groupUnleashedProducts(products) {
@@ -83,6 +120,10 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
         // Find matching Shopify product
         const matchingProduct = shopifyProducts.find(sp => sp.handle === handle);
 
+        // Prepare variant options using the new AttributeSet structure
+        const variantOptions = extractVariantOptions(mainProduct.AttributeSet);
+        const productOptions = extractProductOptions(mainProduct.AttributeSet);
+
         // Prepare product data
         const productData = {
           handle,
@@ -98,31 +139,30 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           images: [{
             src: mainProduct.ImageUrl || (mainProduct.Images && mainProduct.Images[0]?.Url)
           }].filter(img => img.src),
-          variants: group.map(product => ({
-            sku: product.ProductCode,
-            title: isMultiVariant 
-              ? generateVariantTitle(product.AttributeSet?.Options)
-              : 'Default Title',
-            price: product.DefaultSellPrice,
-            compare_at_price: null,
-            weight: product.Weight || 0,
-            weight_unit: 'g',
-            inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-            inventory_policy: 'deny',
-            option1: product.AttributeSet?.Options?.[0]?.value,
-            option2: product.AttributeSet?.Options?.[1]?.value,
-            option3: product.AttributeSet?.Options?.[2]?.value,
-            metafields: Array.from({ length: 10 }, (_, i) => ({
-              namespace: 'custom',
-              key: `price_tier_${i + 1}`,
-              value: product[`SellPriceTier${i + 1}`]?.Value || ''
-            }))
-          })),
-          options: isMultiVariant ? 
-            Array.from(new Set(group.flatMap(p => 
-              p.AttributeSet?.Options?.map(o => o.name) || []
-            ))).slice(0, 3).map(name => ({ name })) : 
-            [{ name: 'Title' }]
+          variants: group.map(product => {
+            const productVariantOptions = extractVariantOptions(product.AttributeSet);
+            return {
+              sku: product.ProductCode,
+              title: isMultiVariant 
+                ? generateVariantTitle(product.AttributeSet)
+                : 'Default Title',
+              price: product.DefaultSellPrice,
+              compare_at_price: null,
+              weight: product.Weight || 0,
+              weight_unit: 'g',
+              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+              inventory_policy: 'deny',
+              option1: productVariantOptions.option1,
+              option2: productVariantOptions.option2,
+              option3: productVariantOptions.option3,
+              metafields: Array.from({ length: 10 }, (_, i) => ({
+                namespace: 'custom',
+                key: `price_tier_${i + 1}`,
+                value: product[`SellPriceTier${i + 1}`]?.Value || ''
+              }))
+            };
+          }),
+          options: productOptions
         };
 
         if (matchingProduct) {
@@ -183,5 +223,8 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
 export {
   mapProducts,
   generateVariantTitle,
-  groupUnleashedProducts
+  groupUnleashedProducts,
+  parseOptionNames,
+  extractVariantOptions,
+  extractProductOptions
 }; 

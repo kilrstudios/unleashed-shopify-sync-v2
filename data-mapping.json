@@ -1,0 +1,441 @@
+{
+    "mapping_rules": {
+      "product_matching_logic": {
+        "description": "How to match existing Shopify products to Unleashed products",
+        "primary_matching": {
+          "method": "shopify_handle",
+          "description": "First match by Shopify product handle (slug format)",
+          "handle_generation": {
+            "multi_variant": "slugify(AttributeSet.ProductTitle)",
+            "single_variant": "slugify(ProductDescription)",
+            "example": "'Wooden Chair Set' becomes 'wooden-chair-set'"
+          }
+        },
+        "verification_matching": {
+          "description": "After handle match, verify connection using SKUs",
+          "single_variant_verification": {
+            "method": "Check if Shopify product's default variant SKU matches Unleashed ProductCode",
+            "condition": "shopify_product.variants[0].sku === unleashed_product.ProductCode"
+          },
+          "multi_variant_verification": {
+            "method": "Check if any Shopify variant SKU matches any Unleashed ProductCode in the group",
+            "condition": "shopify_product.variants.some(v => unleashed_group.some(u => u.ProductCode === v.sku))"
+          }
+        },
+        "matching_process": [
+          "1. Generate expected handle from Unleashed product/group",
+          "2. Find Shopify product with matching handle",
+          "3. Verify SKU connection as described above",
+          "4. If both match → UPDATE existing product",
+          "5. If no match → CREATE new product"
+        ]
+      },
+  
+      "product_grouping_logic": {
+        "description": "How Unleashed products are grouped into Shopify products and variants",
+        "scenarios": {
+          "multi_variant_product": {
+            "condition": "Multiple Unleashed products share the same AttributeSet.ProductTitle",
+            "result": "Create ONE Shopify product with MULTIPLE variants",
+            "product_title": "AttributeSet.ProductTitle",
+            "product_handle": "slugify(AttributeSet.ProductTitle)",
+            "variant_titles": "Generated from Option 1 Value, Option 2 Value, Option 3 Value fields",
+            "sku_matching": "Each Unleashed ProductCode becomes a variant SKU",
+            "example": "3 Unleashed products with ProductTitle='Chair' become 1 Shopify product 'Chair' (handle: 'chair') with 3 variants"
+          },
+          "single_variant_product": {
+            "condition": "Unleashed product has NO AttributeSet.ProductTitle OR is the only product with that ProductTitle",
+            "result": "Create ONE Shopify product with ONE variant",
+            "product_title": "ProductDescription", 
+            "product_handle": "slugify(ProductDescription)",
+            "variant_title": "Default Title",
+            "sku_matching": "Unleashed ProductCode becomes the single variant SKU",
+            "example": "Unleashed product 'Wooden Bookshelf' (no AttributeSet) becomes Shopify product 'Wooden Bookshelf' (handle: 'wooden-bookshelf') with 1 'Default Title' variant"
+          }
+        }
+      },
+  
+      "customer_mapping": {
+        "description": "Map Unleashed customers to Shopify customers using Unleashed as master",
+        "primary_match_field": "email",
+        "secondary_match_fields": ["ContactFirstName + ContactLastName", "CustomerName"],
+        "mapping": {
+          "firstName": {
+            "source": "ContactFirstName",
+            "fallback": "CustomerName.split(' ')[0]",
+            "required": true
+          },
+          "lastName": {
+            "source": "ContactLastName", 
+            "fallback": "CustomerName.split(' ').slice(1).join(' ')",
+            "required": true
+          },
+          "email": {
+            "source": "Email",
+            "fallback": "CustomerCode + '@placeholder.com'",
+            "required": true
+          },
+          "phone": {
+            "source": "PhoneNumber || MobileNumber",
+            "required": false
+          },
+          "metafields": {
+            "unleashed_customer_code": {
+              "namespace": "unleashed",
+              "key": "unleashed_customer_code",
+              "value": "CustomerCode"
+            },
+            "unleashed_customer_name": {
+              "namespace": "unleashed", 
+              "key": "unleashed_customer_name",
+              "value": "CustomerName"
+            },
+            "unleashed_sell_price_tier": {
+              "namespace": "unleashed",
+              "key": "unleashed_sell_price_tier", 
+              "value": "SellPriceTier"
+            }
+          }
+        },
+        "actions": {
+          "create_if_missing": true,
+          "update_existing": true,
+          "archive_orphaned": false
+        }
+      },
+  
+      "product_mapping": {
+        "description": "Map Unleashed products to Shopify products with variant grouping",
+        "grouping_strategy": {
+          "method": "AttributeSet.ProductTitle",
+          "description": "Group products by AttributeSet ProductTitle field. Products with same ProductTitle become variants of one product. Products without AttributeSet.ProductTitle become single-variant products using ProductDescription as the product title."
+        },
+        "product_level_mapping": {
+          "handle": {
+            "source": "slugify(AttributeSet.ProductTitle || ProductDescription)",
+            "description": "Generate handle from ProductTitle or ProductDescription in slug format"
+          },
+          "title": {
+            "source": "AttributeSet.ProductTitle || ProductDescription",
+            "description": "Use ProductTitle from AttributeSet if exists, otherwise use ProductDescription. Single products without AttributeSet use ProductDescription as product title."
+          },
+          "description": {
+            "source": "ProductDescription",
+            "description": "Use the first product's description in the group"
+          },
+          "product_type": {
+            "source": "ProductGroup.GroupName",
+            "description": "Map ProductGroup to Shopify product type"
+          },
+          "vendor": {
+            "source": "ProductBrand.BrandName || 'Default'",
+            "fallback": "Default"
+          },
+          "status": {
+            "source": "!Obsolete ? 'ACTIVE' : 'ARCHIVED'",
+            "description": "Active if not obsolete"
+          },
+          "tags": {
+            "source": "[ProductSubGroup.GroupName, ProductGroup.GroupName].filter(Boolean)",
+            "description": "Add product sub-group and group as tags"
+          },
+          "featured_image": {
+            "source": "ImageUrl || Images[0].Url",
+            "description": "Use first available image"
+          }
+        },
+        "variant_level_mapping": {
+          "sku": {
+            "source": "ProductCode",
+            "required": true
+          },
+          "title": {
+            "source": "generateVariantTitle(AttributeSet) using Option 1 Value, Option 2 Value, Option 3 Value",
+            "description": "For multi-variant products: Generate from option values. For single-variant products (no AttributeSet): use 'Default Title'"
+          },
+          "price": {
+            "source": "DefaultSellPrice",
+            "required": true
+          },
+          "compare_at_price": {
+            "source": "null",
+            "description": "Not mapped from Unleashed"
+          },
+          "weight": {
+            "source": "Weight",
+            "unit": "grams"
+          },
+          "inventory_tracked": {
+            "source": "!NeverDiminishing && IsSellable",
+            "description": "Track if not never diminishing and is sellable"
+          },
+          "inventory_policy": {
+            "source": "'deny'",
+            "description": "Default to deny overselling"
+          },
+          "image": {
+            "source": "ImageUrl || Images[0].Url",
+            "description": "Use product image for variant"
+          },
+          "metafields": {
+            "price_tier_1": {
+              "namespace": "custom",
+              "key": "price_tier_1",
+              "value": "SellPriceTier1.Value"
+            },
+            "price_tier_2": {
+              "namespace": "custom", 
+              "key": "price_tier_2",
+              "value": "SellPriceTier2.Value"
+            },
+            "price_tier_3": {
+              "namespace": "custom",
+              "key": "price_tier_3", 
+              "value": "SellPriceTier3.Value"
+            },
+            "price_tier_4": {
+              "namespace": "custom",
+              "key": "price_tier_4",
+              "value": "SellPriceTier4.Value"
+            },
+            "price_tier_5": {
+              "namespace": "custom",
+              "key": "price_tier_5",
+              "value": "SellPriceTier5.Value"
+            },
+            "price_tier_6": {
+              "namespace": "custom",
+              "key": "price_tier_6", 
+              "value": "SellPriceTier6.Value"
+            },
+            "price_tier_7": {
+              "namespace": "custom",
+              "key": "price_tier_7",
+              "value": "SellPriceTier7.Value"
+            },
+            "price_tier_8": {
+              "namespace": "custom",
+              "key": "price_tier_8",
+              "value": "SellPriceTier8.Value"
+            },
+            "price_tier_9": {
+              "namespace": "custom", 
+              "key": "price_tier_9",
+              "value": "SellPriceTier9.Value"
+            },
+            "price_tier_10": {
+              "namespace": "custom",
+              "key": "price_tier_10",
+              "value": "SellPriceTier10.Value"
+            }
+          }
+        },
+        "variant_options_mapping": {
+          "description": "Handle variant options from new AttributeSet structure",
+          "new_structure": {
+            "option_values": {
+              "option1": "AttributeSet['Option 1 Value']",
+              "option2": "AttributeSet['Option 2 Value']", 
+              "option3": "AttributeSet['Option 3 Value']"
+            },
+            "option_names": {
+              "source": "AttributeSet['Option Names']",
+              "format": "Comma or pipe separated string (e.g., 'Size,Color' or 'Size|Color')",
+              "parsing": "Split by comma or pipe, trim whitespace, filter empty values"
+            }
+          },
+          "example_attributeset": {
+            "ProductTitle": "Chair",
+            "Option 1 Value": "Large",
+            "Option 2 Value": "Blue",
+            "Option 3 Value": null,
+            "Option Names": "Size,Color"
+          },
+          "shopify_mapping": {
+            "product_options": [
+              {"name": "Size"},
+              {"name": "Color"}
+            ],
+            "variant_option_values": {
+              "option1": "Large",
+              "option2": "Blue",
+              "option3": null
+            },
+            "variant_title": "Large / Blue"
+          },
+          "max_options": 3
+        },
+        "inventory_mapping": {
+          "description": "Map inventory levels from Unleashed warehouses to Shopify locations",
+          "source": "InventoryDetails",
+          "mapping_method": "warehouse_to_location_match"
+        },
+        "actions": {
+          "matching_process": [
+            "1. Group Unleashed products by AttributeSet.ProductTitle (or individual if no AttributeSet)",
+            "2. Generate expected Shopify handle: slugify(ProductTitle || ProductDescription)", 
+            "3. Search existing Shopify products by handle",
+            "4. If handle match found, verify SKU connection:",
+            "   - Single variant: Check if default variant SKU = Unleashed ProductCode",
+            "   - Multi variant: Check if any variant SKU matches any Unleashed ProductCode in group",
+            "5. If handle + SKU match → UPDATE existing product",
+            "6. If no match → CREATE new product",
+            "7. If handle matches but SKUs don't → Log conflict and create with modified handle"
+          ],
+          "create_if_missing": true,
+          "update_existing": true,
+          "archive_if_not_in_unleashed": true,
+          "skip_components": {
+            "condition": "IsComponent === true",
+            "description": "Skip products marked as components"
+          },
+          "skip_non_sellable": {
+            "condition": "IsSellable === false", 
+            "description": "Skip products not marked as sellable"
+          }
+        }
+      },
+  
+      "warehouse_location_mapping": {
+        "description": "Map Unleashed warehouses to Shopify locations",
+        "primary_match_field": "name",
+        "mapping": {
+          "name": {
+            "source": "WarehouseCode + ' - ' + WarehouseName",
+            "description": "Combine code and name for unique identification"
+          },
+          "address1": {
+            "source": "AddressLine1 || 'Not specified'",
+            "fallback": "Not specified"
+          },
+          "address2": {
+            "source": "AddressLine2"
+          },
+          "city": {
+            "source": "City || 'Not specified'",
+            "fallback": "Not specified"
+          },
+          "province": {
+            "source": "Region",
+            "description": "Map to province/state"
+          },
+          "country": {
+            "source": "Country",
+            "country_code_mapping": {
+              "Australia": "AU",
+              "United States": "US", 
+              "Canada": "CA",
+              "United Kingdom": "GB",
+              "New Zealand": "NZ"
+            }
+          },
+          "zip": {
+            "source": "PostCode || '00000'",
+            "fallback": "00000"
+          },
+          "phone": {
+            "source": "PhoneNumber"
+          }
+        },
+        "actions": {
+          "create_if_missing": true,
+          "update_existing": true,
+          "deactivate_orphaned": false
+        }
+      },
+  
+      "inventory_sync_mapping": {
+        "description": "Sync inventory levels between systems",
+        "mapping_method": {
+          "unleashed_to_shopify": {
+            "warehouse_guid_to_location_id": "Map by warehouse name matching",
+            "available_quantity": "Map InventoryDetails quantities to Shopify inventory levels"
+          }
+        },
+        "inventory_source": {
+          "unleashed_field": "InventoryDetails[].AvailableQuantity",
+          "shopify_field": "inventoryLevels.quantities.available"
+        }
+      }
+    },
+  
+    "processing_rules": {
+      "processing_order": [
+        "warehouse_location_mapping",
+        "customer_mapping", 
+        "product_mapping",
+        "inventory_sync_mapping"
+      ],
+      "batch_processing": {
+        "products": {
+          "batch_size": 50,
+          "delay_between_batches": 1000
+        },
+        "customers": {
+          "batch_size": 100,
+          "delay_between_batches": 500
+        },
+        "inventory": {
+          "batch_size": 100,
+          "delay_between_batches": 500
+        }
+      },
+      "error_handling": {
+        "continue_on_error": true,
+        "log_errors": true,
+        "retry_failed": true,
+        "max_retries": 3
+      }
+    },
+  
+    "validation_rules": {
+      "required_fields": {
+        "products": ["ProductCode", "ProductDescription", "IsSellable"],
+        "customers": ["CustomerCode", "CustomerName"],
+        "warehouses": ["WarehouseCode", "WarehouseName"]
+      },
+      "data_quality_checks": {
+        "duplicate_skus": "Ensure no duplicate SKUs in products",
+        "valid_emails": "Validate customer email formats",
+        "price_validation": "Ensure prices are positive numbers"
+      }
+    },
+  
+    "helper_functions": {
+      "slugify": {
+        "description": "Convert text to URL-friendly slug format",
+        "example": "slugify('Wooden Chair Set') => 'wooden-chair-set'"
+      },
+      "generateVariantTitle": {
+        "description": "Generate variant title from AttributeSet option values",
+        "example": "generateVariantTitle(attributeSet) with Option 1 Value='Large', Option 2 Value='Blue' => 'Large / Blue'"
+      },
+      "parseOptionNames": {
+        "description": "Parse option names from comma or pipe separated string",
+        "example": "parseOptionNames('Size,Color|Material') => ['Size', 'Color', 'Material']"
+      },
+      "extractVariantOptions": {
+        "description": "Extract option values from AttributeSet for variant mapping",
+        "example": "extractVariantOptions(attributeSet) => {option1: 'Large', option2: 'Blue', option3: null}"
+      },
+      "extractProductOptions": {
+        "description": "Extract product options structure from AttributeSet option names",
+        "example": "extractProductOptions(attributeSet) => [{name: 'Size'}, {name: 'Color'}]"
+      },
+      "findShopifyProductByHandle": {
+        "description": "Search Shopify products by handle for matching"
+      },
+      "verifySkuMatch": {
+        "description": "Verify SKU connection between Unleashed and Shopify products"
+      },
+      "mapCountryCode": {
+        "description": "Convert country names to ISO codes for Shopify"
+      },
+      "cleanProductTitle": {
+        "description": "Clean and format product titles for Shopify"
+      },
+      "validateEmail": {
+        "description": "Validate email format and generate placeholder if needed"
+      }
+    }
+  }

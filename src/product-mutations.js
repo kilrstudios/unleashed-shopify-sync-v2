@@ -26,10 +26,18 @@ function createShopifyGid(type, id) {
   return `gid://shopify/${type}/${id}`;
 }
 
-// Generate variant title from options
-function generateVariantTitle(options) {
-  if (!options || !options.length) return 'Default Title';
-  return options.map(opt => opt.value).join(' / ');
+// Generate variant title from AttributeSet
+function generateVariantTitle(attributeSet) {
+  if (!attributeSet) return 'Default Title';
+  
+  const values = [
+    attributeSet['Option 1 Value'],
+    attributeSet['Option 2 Value'], 
+    attributeSet['Option 3 Value']
+  ].filter(Boolean);
+  
+  if (!values.length) return 'Default Title';
+  return values.join(' / ');
 }
 
 // Build productSet input for bulk operation

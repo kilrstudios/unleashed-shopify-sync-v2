@@ -69,11 +69,11 @@ async function fetchStockOnHand(productCode, authData) {
       console.log(`  ⚠️ No stock data found`);
     } else {
       items.forEach(item => {
-        console.log(`  - Warehouse: ${item.WarehouseCode}`);
-        console.log(`    Available: ${item.QuantityAvailable}`);
-        console.log(`    On Hand: ${item.QtyOnHand}`);
-        console.log(`    Allocated: ${item.QtyAllocated}`);
-        console.log(`    In Transit: ${item.QtyInTransit}`);
+        console.log(`  - Warehouse: ${item.WarehouseCode || item.Warehouse?.WarehouseCode || 'Unknown'}`);
+        console.log(`    Available: ${item.QuantityAvailable || 0}`);
+        console.log(`    On Hand: ${item.QtyOnHand || 0}`);
+        console.log(`    Allocated: ${item.QtyAllocated || 0}`);
+        console.log(`    In Transit: ${item.QtyInTransit || 0}`);
       });
     }
 
@@ -84,47 +84,9 @@ async function fetchStockOnHand(productCode, authData) {
   }
 }
 
-// Fetch attachments (images) for a product
-async function fetchProductAttachments(productCode, authData) {
-  try {
-    console.log(`🖼️ Fetching attachments for product ${productCode}`);
-    
-    const attachmentsUrl = `https://api.unleashedsoftware.com/Products/${productCode}/Attachments`;
-    const response = await fetch(attachmentsUrl, {
-      method: 'GET',
-      headers: await createUnleashedHeaders(attachmentsUrl, authData.apiKey, authData.apiId)
-    });
-
-    if (!response.ok) {
-      console.error(`❌ Error fetching attachments for product ${productCode}: ${response.status} ${response.statusText}`);
-      return [];
-    }
-
-    const data = await response.json();
-    const items = data.Items || [];
-    
-    console.log(`📸 Attachments for product ${productCode}:`);
-    if (items.length === 0) {
-      console.log(`  ⚠️ No attachments found`);
-    } else {
-      items.forEach((item, index) => {
-        console.log(`  ${index + 1}. File: ${item.FileName}`);
-        console.log(`     Description: ${item.Description || 'No description'}`);
-        console.log(`     File Size: ${item.FileSize || 'Unknown'} bytes`);
-        console.log(`     Content Type: ${item.ContentType || 'Unknown'}`);
-        console.log(`     Is Image: ${item.FileName?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'Yes' : 'No'}`);
-        if (item.DownloadUrl) {
-          console.log(`     Download URL: ${item.DownloadUrl}`);
-        }
-      });
-    }
-
-    return items;
-  } catch (error) {
-    console.error(`❌ Error fetching attachments for product ${productCode}:`, error);
-    return [];
-  }
-}
+// Note: Product attachments endpoint is not available in the Unleashed API
+// The /Products/{productCode}/Attachments endpoint returns 404 errors
+// This functionality is disabled until a valid endpoint is found
 
 // Fetch Unleashed data
 async function fetchUnleashedData(authData) {
@@ -188,14 +150,9 @@ async function fetchUnleashedData(authData) {
         const stockData = await fetchStockOnHand(product.ProductCode, authData);
         product.StockOnHand = stockData;
         
-        // Fetch attachments (images)
-        console.log(`   🖼️ Fetching attachments for ${product.ProductCode}...`);
-        const attachments = await fetchProductAttachments(product.ProductCode, authData);
-        product.Attachments = attachments.filter(a => a.FileName.match(/\.(jpg|jpeg|png|gif)$/i));
-        
-        if (product.Attachments.length > 0) {
-          console.log(`      Found ${product.Attachments.length} image(s)`);
-        }
+        // Note: Product attachments endpoint not available in Unleashed API
+        // Keeping empty array for compatibility
+        product.Attachments = [];
       } catch (error) {
         console.warn(`⚠️ Error fetching additional data for ${product.ProductCode}:`, error.message);
       }

@@ -2,22 +2,35 @@ import { getProductById } from './product-mutations';
 
 async function updateProductInventory(shopifyClient, inventoryItemId, locationId, quantity) {
   try {
-    // First get current inventory level
+    // First get current inventory levels for this inventory item
     const query = `
-      query getInventoryLevel($inventoryItemId: ID!, $locationId: ID!) {
-        inventoryLevel(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+      query getInventoryLevels($inventoryItemId: ID!) {
+        inventoryItem(id: $inventoryItemId) {
           id
-          available
+          inventoryLevels(first: 50) {
+            edges {
+              node {
+                id
+                available
+                location {
+                  id
+                }
+              }
+            }
+          }
         }
       }
     `;
 
     const levelResponse = await shopifyClient.request(query, {
-      inventoryItemId,
-      locationId
+      inventoryItemId
     });
 
-    const currentLevel = levelResponse.inventoryLevel?.available || 0;
+    // Find the inventory level for the specific location
+    const inventoryLevels = levelResponse.inventoryItem?.inventoryLevels?.edges || [];
+    const locationLevel = inventoryLevels.find(edge => edge.node.location.id === locationId);
+    
+    const currentLevel = locationLevel?.node?.available || 0;
     const delta = quantity - currentLevel;
 
     if (delta === 0) {
@@ -149,60 +162,55 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
       const variant = shopifyProduct.variants.find(v => v.sku === unleashedProduct.ProductCode);
       if (!variant) continue;
 
-      // Update inventory for each location
-      console.log(`\n🏢 Updating inventory for product ${unleashedProduct.ProductCode} across locations...`);
-      for (const location of locations) {
+      // Update inventory for the main location only with total on-hand stock
+      console.log(`\n🏢 Updating inventory for product ${unleashedProduct.ProductCode} at main location...`);
+      
+      // Find the main warehouse location (typically "Main Warehouse" or first location)
+      const mainLocation = locations.find(loc => 
+        loc.name.toLowerCase().includes('main') || 
+        loc.name.toLowerCase().includes('warehouse')
+      ) || locations[0]; // Fallback to first location
+      
+      if (!mainLocation) {
+        console.log(`⚠️ No main location found - skipping inventory update`);
+      } else {
         try {
-          // Find warehouse code in location metafields
-          const warehouseCode = location.metafields?.edges?.find(edge => 
-            edge.node.namespace === 'custom' && 
-            edge.node.key === 'warehouse_code'
-          )?.node?.value;
+          // Calculate total on-hand stock across all warehouses
+          const totalOnHand = unleashedProduct.StockOnHand?.reduce((total, stock) => {
+            const qty = parseInt(stock.QtyOnHand) || 0;
+            console.log(`  📦 Warehouse ${stock.WarehouseCode || 'Unknown'}: ${qty} on hand`);
+            return total + qty;
+          }, 0) || 0;
 
-          if (!warehouseCode) {
-            console.log(`⚠️ No warehouse code found for location ${location.name} - skipping`);
-            continue;
-          }
-
-          // Find stock on hand for this warehouse
-          const warehouseStock = unleashedProduct.StockOnHand?.find(s => 
-            s.WarehouseCode === warehouseCode
-          );
-
-          if (!warehouseStock) {
-            console.log(`⚠️ No stock data found for warehouse ${warehouseCode} - skipping`);
-            continue;
-          }
-
-          console.log(`📊 Updating inventory for location ${location.name} (${warehouseCode}): ${warehouseStock.QuantityAvailable} units`);
+          console.log(`📊 Updating inventory for location ${mainLocation.name}: ${totalOnHand} total units on hand`);
           
           const response = await updateProductInventory(
             shopifyClient,
             variant.inventoryItemId,
-            location.id,
-            warehouseStock.QuantityAvailable
+            mainLocation.id,
+            totalOnHand
           );
 
           if (response.userErrors?.length > 0) {
             console.error(`❌ Failed to update inventory:`, response.userErrors);
             results.inventory.failed.push({
               productCode: unleashedProduct.ProductCode,
-              location: location.name,
+              location: mainLocation.name,
               errors: response.userErrors
             });
           } else {
             console.log(`✅ Successfully updated inventory`);
             results.inventory.successful.push({
               productCode: unleashedProduct.ProductCode,
-              location: location.name,
-              quantity: warehouseStock.QuantityAvailable
+              location: mainLocation.name,
+              quantity: totalOnHand
             });
           }
         } catch (error) {
-          console.error(`❌ Error updating inventory for ${unleashedProduct.ProductCode} at ${location.name}:`, error);
+          console.error(`❌ Error updating inventory for ${unleashedProduct.ProductCode} at ${mainLocation.name}:`, error);
           results.inventory.failed.push({
             productCode: unleashedProduct.ProductCode,
-            location: location.name,
+            location: mainLocation.name,
             error: error.message
           });
         }
@@ -290,56 +298,111 @@ async function handleInventoryUpdate(request, env) {
     
     for (const variant of variants) {
       try {
-        console.log(`  📝 Processing variant ${variant.id} with inventory item ${variant.inventoryItemId}`);
+        console.log(`  📝 Processing variant ${variant.id}`);
         
-        // Get locations with their inventory levels
-        const locationsResponse = await fetch(`${baseUrl}/inventory_levels.json?inventory_item_ids=${variant.inventoryItemId}`, {
-          method: 'GET',
-          headers
+        // First get current inventory levels
+        const queryLevels = `
+          query getInventoryLevels($variantId: ID!) {
+            productVariant(id: $variantId) {
+              inventoryItem {
+                id
+                inventoryLevels(first: 50) {
+                  edges {
+                    node {
+                      id
+                      available
+                      location {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        const levelsResponse = await fetch(`${baseUrl}/graphql.json`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            query: queryLevels,
+            variables: {
+              variantId: variant.id
+            }
+          })
         });
+
+        const levelsData = await levelsResponse.json();
         
-        if (!locationsResponse.ok) {
-          throw new Error(`Failed to get inventory levels: ${locationsResponse.status} ${locationsResponse.statusText}`);
+        if (levelsData.errors) {
+          throw new Error(`Failed to get inventory levels: ${JSON.stringify(levelsData.errors)}`);
         }
 
-        const { inventory_levels } = await locationsResponse.json();
-        console.log(`  📊 Current inventory levels:`, inventory_levels);
+        const inventoryItem = levelsData.data?.productVariant?.inventoryItem;
+        if (!inventoryItem) {
+          throw new Error('No inventory item found for variant');
+        }
+
+        console.log(`  📊 Current inventory levels:`, inventoryItem.inventoryLevels.edges);
 
         // Update inventory for each location
-        for (const level of inventory_levels) {
-          const { location_id, available } = level;
-          const desiredQuantity = variant.quantities[location_id] || 0;
+        for (const edge of inventoryItem.inventoryLevels.edges) {
+          const level = edge.node;
+          const locationId = level.location.id;
+          const currentQty = level.available;
+          const desiredQty = variant.quantities[locationId] || 0;
           
-          if (available === desiredQuantity) {
-            console.log(`  ✓ Location ${location_id} already at correct quantity (${available})`);
+          if (currentQty === desiredQty) {
+            console.log(`  ✓ Location ${locationId} already at correct quantity (${currentQty})`);
             continue;
           }
 
-          console.log(`  🔄 Updating location ${location_id} from ${available} to ${desiredQuantity}`);
+          console.log(`  🔄 Updating location ${locationId} from ${currentQty} to ${desiredQty}`);
           
-          const adjustmentResponse = await fetch(`${baseUrl}/inventory_levels/adjust.json`, {
+          const mutation = `
+            mutation adjustInventoryLevel($input: InventoryAdjustQuantityInput!) {
+              inventoryAdjustQuantity(input: $input) {
+                inventoryLevel {
+                  id
+                  available
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }
+          `;
+
+          const adjustmentResponse = await fetch(`${baseUrl}/graphql.json`, {
             method: 'POST',
             headers,
             body: JSON.stringify({
-              inventory_level: {
-                inventory_item_id: variant.inventoryItemId,
-                location_id: location_id,
-                available_adjustment: desiredQuantity - available
+              query: mutation,
+              variables: {
+                input: {
+                  inventoryLevelId: level.id,
+                  availableDelta: desiredQty - currentQty
+                }
               }
             })
           });
 
-          if (!adjustmentResponse.ok) {
-            throw new Error(`Failed to adjust inventory: ${adjustmentResponse.status} ${adjustmentResponse.statusText}`);
+          const adjustmentData = await adjustmentResponse.json();
+          
+          if (adjustmentData.errors || adjustmentData.data?.inventoryAdjustQuantity?.userErrors?.length > 0) {
+            throw new Error(`Failed to adjust inventory: ${JSON.stringify(adjustmentData.errors || adjustmentData.data.inventoryAdjustQuantity.userErrors)}`);
           }
 
-          const adjustmentResult = await adjustmentResponse.json();
-          console.log(`  ✅ Successfully updated inventory for location ${location_id}:`, adjustmentResult);
+          const newLevel = adjustmentData.data.inventoryAdjustQuantity.inventoryLevel;
+          console.log(`  ✅ Successfully updated inventory for location ${locationId}:`, newLevel);
+          
           results.successful.push({
             variantId: variant.id,
-            locationId: location_id,
-            oldQuantity: available,
-            newQuantity: desiredQuantity
+            locationId,
+            oldQuantity: currentQty,
+            newQuantity: newLevel.available
           });
         }
       } catch (error) {

@@ -279,25 +279,25 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
           variants: group.map(product => {
             const variantOptions = extractVariantOptions(product.AttributeSet);
             return {
-              sku: product.ProductCode,
-              title: isMultiVariant 
+            sku: product.ProductCode,
+            title: isMultiVariant 
                 ? generateVariantTitle(product.AttributeSet)
-                : 'Default Title',
-              price: product.DefaultSellPrice,
-              compare_at_price: null,
-              weight: product.Weight || 0,
-              weight_unit: 'g',
-              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
-              inventory_policy: 'deny',
+              : 'Default Title',
+            price: product.DefaultSellPrice,
+            compare_at_price: null,
+            weight: product.Weight || 0,
+            weight_unit: 'g',
+            inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+            inventory_policy: 'deny',
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,
               stock_on_hand: product.StockOnHand || [],
-              metafields: Array.from({ length: 10 }, (_, i) => ({
-                namespace: 'custom',
-                key: `price_tier_${i + 1}`,
-                value: product[`SellPriceTier${i + 1}`]?.Value || ''
-              }))
+            metafields: Array.from({ length: 10 }, (_, i) => ({
+              namespace: 'custom',
+              key: `price_tier_${i + 1}`,
+              value: product[`SellPriceTier${i + 1}`]?.Value || ''
+            }))
             };
           })
         };
@@ -327,8 +327,8 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             if (differences.hasChanges) {
               console.log(`   🔄 Changes detected - will UPDATE product:`);
               differences.differences.forEach(diff => console.log(`      - ${diff}`));
-              productData.id = matchingProduct.id;
-              results.toUpdate.push(productData);
+            productData.id = matchingProduct.id;
+            results.toUpdate.push(productData);
             } else {
               console.log(`   ✅ Product is IDENTICAL to existing Shopify product`);
               if (differences.needsPostSync.inventory || differences.needsPostSync.images) {
@@ -346,13 +346,13 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
                 });
               } else {
                 console.log(`   📊 No changes or post-sync operations needed - SKIPPING`);
-                results.skipped.push({
+              results.skipped.push({
                   title: matchingProduct.title,
-                  id: matchingProduct.id,
+                id: matchingProduct.id,
                   variantCount: matchingProduct.variants.length,
                   reason: 'identical_data',
                   needsPostSync: { inventory: false, images: false }
-                });
+              });
               }
             }
           } else {

@@ -99,7 +99,7 @@ export async function handleProductMutations(request, env) {
     
     // Execute product mutations
     console.log('🔄 Starting product mutations...');
-    const mutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain);
+    const mutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain, data.shopify.locations, true);
 
     console.log('✅ Product mutations completed successfully');
 
@@ -162,7 +162,7 @@ export async function handleProductSync(request, env) {
 
     // Execute post-sync operations (inventory and images)
     console.log(`🔄 Step 4c: Executing post-sync operations...`);
-    
+
     // Get all products that need post-sync operations (both updated and skipped)
     const productsNeedingPostSync = [
       ...mappingResults.toUpdate,
@@ -221,7 +221,7 @@ async function executeProductMutations(shopifyClient, mappingResults) {
         } catch (error) {
           console.error(`❌ Error creating product "${productData.title}":`, error);
           results.errors++;
-        }
+          }
       }
     }
 

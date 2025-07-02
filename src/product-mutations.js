@@ -843,9 +843,15 @@ async function mutateProductsDirect(shopifyAuth, mappingResults) {
   return results;
 }
 
-// Main function: Decides between queue and direct methods
-async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null) {
+// Main function: Decides between comprehensive, queue, and direct methods
+async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null, shopifyLocations = null, useComprehensive = true) {
   const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
+  
+  // Use comprehensive productSet mutations if locations are available and flag is true
+  if (useComprehensive && shopifyLocations) {
+    console.log(`🚀 Using comprehensive productSet mutations for ${totalOperations} operations...`);
+    return await mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyLocations);
+  }
   
   // Decide strategy based on availability and volume
   const useQueue = env && env.PRODUCT_QUEUE && totalOperations > 5; // Use queue for > 5 operations
@@ -1302,6 +1308,591 @@ async function getProductById(shopifyClient, productId) {
   }
 }
 
+// Build comprehensive productSet input for single mutation
+function buildComprehensiveProductSetInput(productData, shopifyLocations, isUpdate = false) {
+  // Determine if this is a single-variant product with default options only
+  const isSingleVariantDefault = !productData.options || 
+    productData.options.length === 0 || 
+    (productData.options.length === 1 && productData.options[0].name === 'Title');
+  
+  const input = {
+    title: productData.title,
+    handle: productData.handle || productData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+    status: productData.status || 'ACTIVE',
+    productType: productData.product_type || '',
+    vendor: productData.vendor || 'Default',
+    tags: productData.tags || []
+  };
+
+  // Add product ID if updating
+  if (isUpdate && productData.id) {
+    input.id = productData.id;
+  }
+
+  // Add product description
+  if (productData.description) {
+    input.descriptionHtml = productData.description;
+  }
+
+  // Add product metafields
+  if (productData.metafields && productData.metafields.length > 0) {
+    input.metafields = productData.metafields
+      .filter(mf => mf.value && mf.value.toString().trim() !== '')
+      .map(mf => ({
+        namespace: mf.namespace,
+        key: mf.key,
+        value: mf.value.toString(),
+        type: mf.type || 'single_line_text_field'
+      }));
+  }
+
+  // Handle product options - build productOptions array first
+  if (isSingleVariantDefault) {
+    input.productOptions = [{
+      name: 'Title',
+      position: 1,
+      values: [{ name: 'Default Title' }]
+    }];
+  } else {
+    const optionValuesMap = new Map();
+    
+    productData.variants.forEach(variant => {
+      if (variant.option1) {
+        if (!optionValuesMap.has(0)) optionValuesMap.set(0, new Set());
+        optionValuesMap.get(0).add(variant.option1);
+      }
+      if (variant.option2) {
+        if (!optionValuesMap.has(1)) optionValuesMap.set(1, new Set());
+        optionValuesMap.get(1).add(variant.option2);
+      }
+      if (variant.option3) {
+        if (!optionValuesMap.has(2)) optionValuesMap.set(2, new Set());
+        optionValuesMap.get(2).add(variant.option3);
+      }
+    });
+
+    input.productOptions = productData.options.map((option, index) => ({
+      name: option.name || option,
+      position: index + 1,
+      values: optionValuesMap.has(index) 
+        ? Array.from(optionValuesMap.get(index)).map(value => ({ name: value }))
+        : [{ name: 'Default' }]
+    }));
+  }
+
+  // Build variants array
+  input.variants = productData.variants.map(variant => {
+    const variantInput = {
+      sku: variant.sku,
+      price: variant.price?.toString()
+    };
+
+    // Add variant ID if updating
+    if (isUpdate && variant.id) {
+      variantInput.id = variant.id;
+    }
+
+    // Add optionValues - required for productSet API
+    if (isSingleVariantDefault) {
+      variantInput.optionValues = [{ optionName: "Title", name: "Default Title" }];
+    } else {
+      const optionValues = [];
+      if (variant.option1) optionValues.push({ optionName: productData.options[0]?.name || 'Option1', name: variant.option1 });
+      if (variant.option2) optionValues.push({ optionName: productData.options[1]?.name || 'Option2', name: variant.option2 });
+      if (variant.option3) optionValues.push({ optionName: productData.options[2]?.name || 'Option3', name: variant.option3 });
+      
+      variantInput.optionValues = optionValues.length > 0 ? optionValues : [{ optionName: "Title", name: "Default Title" }];
+    }
+
+    // Add inventoryItem details
+    variantInput.inventoryItem = {
+      tracked: variant.inventory_management === 'shopify'
+    };
+
+    // Add weight measurement
+    if (variant.weight) {
+      variantInput.inventoryItem.measurement = {
+        weight: {
+          value: parseFloat(variant.weight) || 0,
+          unit: 'KILOGRAMS'  // Using KILOGRAMS to match your example
+        }
+      };
+    }
+
+    // Add cost if available
+    if (variant.cost) {
+      variantInput.inventoryItem.cost = variant.cost.toString();
+    }
+
+    // Add inventory quantities for each location - matching your example format
+    if (variant.inventory_levels && shopifyLocations) {
+      variantInput.inventoryQuantities = [];
+      
+      variant.inventory_levels.forEach(level => {
+        if (level.available !== undefined) {
+          const location = shopifyLocations.find(loc => 
+            loc.id === level.location_id || 
+            extractNumericId(loc.id) === level.location_id
+          );
+          
+          if (location) {
+            variantInput.inventoryQuantities.push({
+              locationId: location.id,  // Keep the full GID format
+              name: "available",        // Use "available" as the name like in your example
+              quantity: parseInt(level.available) || 0
+            });
+          }
+        }
+      });
+    }
+
+    // Add metafields for price tiers - matching your exact format
+    if (variant.metafields && variant.metafields.length > 0) {
+      variantInput.metafields = variant.metafields
+        .filter(mf => mf.value && mf.value.toString().trim() !== '')
+        .map(mf => ({
+          key: mf.key,
+          namespace: mf.namespace,
+          value: mf.type === 'money' ? JSON.stringify({
+            amount: mf.value.toString(),
+            currency_code: "AUD"
+          }) : mf.value.toString(),
+          type: mf.type || 'single_line_text_field'
+        }));
+    }
+
+    return variantInput;
+  });
+
+  return input;
+}
+
+// Execute comprehensive productSet mutation with image handling
+async function executeComprehensiveProductSet(baseUrl, headers, productData, shopifyLocations, isUpdate = false) {
+  const mutation = `
+    mutation productSet($input: ProductSetInput!) {
+      productSet(input: $input) {
+        product {
+          id
+          handle
+          title
+          variants(first: 250) {
+            edges {
+              node {
+                id
+                sku
+                title
+                inventoryItem {
+                  id
+                }
+              }
+            }
+          }
+        }
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+
+  const input = buildComprehensiveProductSetInput(productData, shopifyLocations, isUpdate);
+  
+  console.log(`🔄 Executing comprehensive productSet for: ${productData.title}`);
+  
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query: mutation,
+      variables: { input }
+    })
+  });
+
+  const result = await response.json();
+  
+  if (result.errors) {
+    console.error('❌ GraphQL errors:', result.errors);
+    throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
+  }
+
+  if (result.data?.productSet?.userErrors?.length > 0) {
+    console.error('❌ ProductSet user errors:', result.data.productSet.userErrors);
+    throw new Error(`ProductSet errors: ${JSON.stringify(result.data.productSet.userErrors)}`);
+  }
+
+  const productSetResult = result.data.productSet;
+
+  // Handle variant images after product creation/update
+  let imageResult = null;
+  if (productData.images && productData.images.length > 0) {
+    console.log(`🖼️ Processing images for product: ${productData.title}`);
+    imageResult = await handleVariantImages(baseUrl, headers, productSetResult, productData);
+  }
+
+  return {
+    ...productSetResult,
+    imageProcessing: imageResult
+  };
+}
+
+// New comprehensive mutation function that handles everything at once
+async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyLocations) {
+  const baseUrl = `https://${shopifyAuth.shop}.myshopify.com/admin/api/2023-10`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': shopifyAuth.accessToken
+  };
+
+  const results = {
+    method: 'comprehensive',
+    created: { successful: [], failed: [] },
+    updated: { successful: [], failed: [] },
+    archived: { successful: [], failed: [] },
+    images: { successful: [], failed: [] },
+    errors: [],
+    summary: { created: 0, updated: 0, archived: 0, failed: 0, imagesProcessed: 0, imagesFailed: 0 }
+  };
+
+  // Process product creations
+  console.log(`🆕 Processing ${mappingResults.toCreate.length} products to create...`);
+  for (const product of mappingResults.toCreate) {
+    try {
+      const result = await executeComprehensiveProductSet(baseUrl, headers, product, shopifyLocations, false);
+      results.created.successful.push({
+        product: result.product,
+        originalData: product,
+        imageProcessing: result.imageProcessing
+      });
+      results.summary.created++;
+      
+      // Track image processing results
+      if (result.imageProcessing) {
+        if (result.imageProcessing.success) {
+          results.images.successful.push({
+            productTitle: product.title,
+            ...result.imageProcessing
+          });
+          results.summary.imagesProcessed++;
+        } else {
+          results.images.failed.push({
+            productTitle: product.title,
+            error: result.imageProcessing.error
+          });
+          results.summary.imagesFailed++;
+        }
+      }
+      
+      console.log(`✅ Created product: ${product.title}`);
+    } catch (error) {
+      console.error(`❌ Failed to create product: ${product.title}`, error);
+      results.created.failed.push({
+        product,
+        error: error.message
+      });
+      results.errors.push({
+        operation: 'create',
+        product: product.title,
+        error: error.message
+      });
+      results.summary.failed++;
+    }
+  }
+
+  // Process product updates
+  console.log(`🔄 Processing ${mappingResults.toUpdate.length} products to update...`);
+  for (const product of mappingResults.toUpdate) {
+    try {
+      const result = await executeComprehensiveProductSet(baseUrl, headers, product, shopifyLocations, true);
+      results.updated.successful.push({
+        product: result.product,
+        originalData: product,
+        imageProcessing: result.imageProcessing
+      });
+      results.summary.updated++;
+      
+      // Track image processing results
+      if (result.imageProcessing) {
+        if (result.imageProcessing.success) {
+          results.images.successful.push({
+            productTitle: product.title,
+            ...result.imageProcessing
+          });
+          results.summary.imagesProcessed++;
+        } else {
+          results.images.failed.push({
+            productTitle: product.title,
+            error: result.imageProcessing.error
+          });
+          results.summary.imagesFailed++;
+        }
+      }
+      
+      console.log(`✅ Updated product: ${product.title}`);
+    } catch (error) {
+      console.error(`❌ Failed to update product: ${product.title}`, error);
+      results.updated.failed.push({
+        product,
+        error: error.message
+      });
+      results.errors.push({
+        operation: 'update',
+        product: product.title,
+        error: error.message
+      });
+      results.summary.failed++;
+    }
+  }
+
+  // Process product archiving (still need separate mutations for this)
+  if (mappingResults.toArchive.length > 0) {
+    console.log(`🗄️ Processing ${mappingResults.toArchive.length} products to archive...`);
+    try {
+      const archiveResults = await archiveProducts(baseUrl, headers, mappingResults.toArchive);
+      results.archived = archiveResults;
+      results.summary.archived = archiveResults.successful.length;
+      results.summary.failed += archiveResults.failed.length;
+    } catch (error) {
+      console.error('❌ Failed to archive products:', error);
+      results.errors.push({
+        operation: 'archive',
+        error: error.message
+      });
+    }
+  }
+
+  console.log(`✅ Comprehensive mutation completed:`, results.summary);
+  return results;
+}
+
+// Handle variant images after product creation/update
+async function handleVariantImages(baseUrl, headers, productResult, productData) {
+  if (!productData.images || productData.images.length === 0) {
+    return { success: true, message: 'No images to process' };
+  }
+
+  console.log(`🖼️ Processing ${productData.images.length} images for product: ${productResult.product.title}`);
+
+  try {
+    // Step 1: Get current product images
+    const existingImages = await getProductImages(baseUrl, headers, productResult.product.id);
+    
+    // Step 2: Determine which images need to be uploaded
+    const imagesToUpload = [];
+    const imageVariantMappings = [];
+
+    for (const imageData of productData.images) {
+      // Check if image already exists (by comparing src URL)
+      const existingImage = existingImages.find(img => img.originalSrc === imageData.src);
+      
+      if (existingImage) {
+        console.log(`✅ Image already exists: ${imageData.src}`);
+        // Image exists, just need to link to variants
+        if (imageData.variantSkus && imageData.variantSkus.length > 0) {
+          imageVariantMappings.push({
+            imageId: existingImage.id,
+            variantSkus: imageData.variantSkus,
+            src: imageData.src
+          });
+        }
+      } else {
+        console.log(`📤 Need to upload new image: ${imageData.src}`);
+        imagesToUpload.push(imageData);
+      }
+    }
+
+    // Step 3: Upload new images if needed
+    let uploadedImages = [];
+    if (imagesToUpload.length > 0) {
+      uploadedImages = await uploadProductImages(baseUrl, headers, productResult.product.id, imagesToUpload);
+    }
+
+    // Step 4: Build complete image-variant mapping list
+    for (const uploadedImage of uploadedImages) {
+      const originalImageData = imagesToUpload.find(img => img.src === uploadedImage.originalSrc);
+      if (originalImageData && originalImageData.variantSkus && originalImageData.variantSkus.length > 0) {
+        imageVariantMappings.push({
+          imageId: uploadedImage.id,
+          variantSkus: originalImageData.variantSkus,
+          src: uploadedImage.originalSrc
+        });
+      }
+    }
+
+    // Step 5: Link images to variants
+    if (imageVariantMappings.length > 0) {
+      await linkImagesToVariants(baseUrl, headers, productResult.product.id, productResult.product.variants.edges, imageVariantMappings);
+    }
+
+    return {
+      success: true,
+      uploadedImages: uploadedImages.length,
+      linkedImages: imageVariantMappings.length,
+      message: `Processed ${uploadedImages.length} uploads and ${imageVariantMappings.length} variant links`
+    };
+
+  } catch (error) {
+    console.error('❌ Error handling variant images:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Get existing product images
+async function getProductImages(baseUrl, headers, productId) {
+  const query = `
+    query getProductImages($productId: ID!) {
+      product(id: $productId) {
+        images(first: 50) {
+          edges {
+            node {
+              id
+              originalSrc
+              variantIds
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query,
+      variables: { productId }
+    })
+  });
+
+  const result = await response.json();
+  
+  if (result.errors) {
+    throw new Error(`Failed to get product images: ${JSON.stringify(result.errors)}`);
+  }
+
+  return result.data.product.images.edges.map(edge => edge.node);
+}
+
+// Upload new images to product
+async function uploadProductImages(baseUrl, headers, productId, imagesToUpload) {
+  const mutation = `
+    mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
+      productAppendImages(productId: $productId, images: $images) {
+        images {
+          id
+          originalSrc
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const images = imagesToUpload.map(img => ({ src: img.src }));
+
+  console.log(`📤 Uploading ${images.length} images to product...`);
+
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query: mutation,
+      variables: {
+        productId,
+        images
+      }
+    })
+  });
+
+  const result = await response.json();
+  
+  if (result.errors) {
+    throw new Error(`Failed to upload images: ${JSON.stringify(result.errors)}`);
+  }
+
+  if (result.data.productAppendImages.userErrors.length > 0) {
+    throw new Error(`Image upload errors: ${JSON.stringify(result.data.productAppendImages.userErrors)}`);
+  }
+
+  console.log(`✅ Uploaded ${result.data.productAppendImages.images.length} images`);
+  return result.data.productAppendImages.images;
+}
+
+// Link images to specific variants
+async function linkImagesToVariants(baseUrl, headers, productId, productVariants, imageVariantMappings) {
+  // Convert variant SKUs to variant IDs
+  const variantIdMap = new Map();
+  productVariants.forEach(variantEdge => {
+    const variant = variantEdge.node;
+    variantIdMap.set(variant.sku, variant.id);
+  });
+
+  // Build image linking payload
+  const imagesToLink = imageVariantMappings.map(mapping => {
+    const variantIds = mapping.variantSkus
+      .map(sku => variantIdMap.get(sku))
+      .filter(Boolean); // Remove any undefined variant IDs
+
+    return {
+      id: mapping.imageId,
+      variantIds
+    };
+  }).filter(img => img.variantIds.length > 0); // Only include images with valid variant IDs
+
+  if (imagesToLink.length === 0) {
+    console.log('⚠️ No valid variant IDs found for image linking');
+    return;
+  }
+
+  const mutation = `
+    mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
+      productAppendImages(productId: $productId, images: $images) {
+        images {
+          id
+          variantIds
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  console.log(`🔗 Linking ${imagesToLink.length} images to variants...`);
+
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query: mutation,
+      variables: {
+        productId,
+        images: imagesToLink
+      }
+    })
+  });
+
+  const result = await response.json();
+  
+  if (result.errors) {
+    throw new Error(`Failed to link images to variants: ${JSON.stringify(result.errors)}`);
+  }
+
+  if (result.data.productAppendImages.userErrors.length > 0) {
+    throw new Error(`Image linking errors: ${JSON.stringify(result.data.productAppendImages.userErrors)}`);
+  }
+
+  console.log(`✅ Successfully linked images to variants`);
+}
+
 export {
   mutateProducts,
   buildProductSetInput,
@@ -1314,5 +1905,10 @@ export {
   handleImageUpdate,
   getProductById,
   createProduct,
-  updateProduct
+  updateProduct,
+  mutateProductsComprehensive,
+  handleVariantImages,
+  getProductImages,
+  uploadProductImages,
+  linkImagesToVariants
 }; 

@@ -250,9 +250,9 @@ export async function handleComprehensiveSync(request, env) {
         console.log('🗺️ Step 4a: Mapping products...');
         const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
         
-        // Execute product mutations (using queue-based approach)
+        // Execute product mutations (using comprehensive productSet approach)
         console.log('🔄 Step 4b: Executing product mutations...');
-        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain);
+        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain, data.shopify.locations, true);
 
         results.steps.productSync = {
           success: true,
@@ -266,7 +266,7 @@ export async function handleComprehensiveSync(request, env) {
             processed: productMappingResults.processed
           },
           mutations: {
-            method: productMutationResults.method,
+            method: productMutationResults.method || 'comprehensive',
             ...(productMutationResults.method === 'queue_based' ? {
               // Queue-based response structure
               syncId: productMutationResults.syncId,
@@ -275,8 +275,22 @@ export async function handleComprehensiveSync(request, env) {
                 updates: productMutationResults.queued.updates,
                 archives: productMutationResults.queued.archives
               }
+            } : productMutationResults.method === 'comprehensive' || !productMutationResults.method ? {
+              // Comprehensive response structure
+              created: {
+                successful: productMutationResults.created?.successful?.length || 0,
+                failed: productMutationResults.created?.failed?.length || 0
+              },
+              updated: {
+                successful: productMutationResults.updated?.successful?.length || 0,
+                failed: productMutationResults.updated?.failed?.length || 0
+              },
+              archived: {
+                successful: productMutationResults.archived?.successful?.length || 0,
+                failed: productMutationResults.archived?.failed?.length || 0
+              }
             } : {
-              // Direct response structure
+              // Direct response structure (legacy)
               bulkOperation: {
                 success: productMutationResults.bulkOperation?.success || false,
                 operationId: productMutationResults.bulkOperation?.operation?.id || null,
@@ -318,6 +332,86 @@ export async function handleComprehensiveSync(request, env) {
       }
 
       // ========================================
+      // STEP 5: POST-SYNC OPERATIONS (Inventory & Images)
+      // ========================================
+      if (results.steps.productSync?.success) {
+        console.log('\n🔄 Step 5: Post-sync operations (inventory & images)...');
+        const postSyncStepStart = Date.now();
+        
+        try {
+          // Import post-sync handler
+          const { handlePostSyncOperations } = await import('./post-sync-handler.js');
+          
+          // Create shopify client helper
+          const { accessToken, shopDomain } = authData.shopify;
+          const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+          const headers = {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': accessToken
+          };
+          
+          const shopifyClient = {
+            request: async (query, variables = {}) => {
+              const response = await fetch(`${baseUrl}/graphql.json`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ query, variables })
+              });
+              const data = await response.json();
+              if (data.errors) {
+                throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
+              }
+              return data.data;
+            }
+          };
+          
+          // Run post-sync operations for all products that have inventory or image needs
+          const productsNeedingPostSync = data.unleashed.products.filter(product => {
+            // Include products with stock on hand or attachments
+            return (product.StockOnHand && product.StockOnHand.length > 0) || 
+                   (product.Attachments && product.Attachments.length > 0);
+          });
+          
+          console.log(`📦 Running post-sync operations for ${productsNeedingPostSync.length} products...`);
+          
+          const postSyncResults = await handlePostSyncOperations(
+            shopifyClient,
+            productsNeedingPostSync,
+            data.shopify.products,
+            data.shopify.locations
+          );
+          
+          results.steps.postSync = {
+            success: true,
+            duration: `${((Date.now() - postSyncStepStart) / 1000).toFixed(2)}s`,
+            inventory: {
+              successful: postSyncResults.inventory.successful.length,
+              failed: postSyncResults.inventory.failed.length
+            },
+            images: {
+              successful: postSyncResults.images.successful.length,
+              failed: postSyncResults.images.failed.length
+            }
+          };
+          
+          console.log('✅ Post-sync operations completed:', {
+            inventory: `${postSyncResults.inventory.successful.length} successful, ${postSyncResults.inventory.failed.length} failed`,
+            images: `${postSyncResults.images.successful.length} successful, ${postSyncResults.images.failed.length} failed`
+          });
+          results.summary.successfulOperations++;
+          
+        } catch (error) {
+          console.error('❌ Post-sync operations failed:', error);
+          results.steps.postSync = {
+            success: false,
+            duration: `${((Date.now() - postSyncStepStart) / 1000).toFixed(2)}s`,
+            error: error.message
+          };
+          results.summary.failedOperations++;
+        }
+      }
+
+      // ========================================
       // FINAL SUMMARY
       // ========================================
       const totalDuration = Date.now() - startTime;
@@ -346,6 +440,11 @@ export async function handleComprehensiveSync(request, env) {
         } else {
           console.log(`📦 Products: ${productMutations.method} - ${productMutations.created?.successful || 0} created, ${productMutations.updated?.successful || 0} updated, ${productMutations.archived?.successful || 0} archived`);
         }
+      }
+      
+      if (results.steps.postSync?.success) {
+        const postSync = results.steps.postSync;
+        console.log(`🔄 Post-Sync: ${postSync.inventory.successful} inventory updates, ${postSync.images.successful} image updates`);
       }
 
       return jsonResponse(results);

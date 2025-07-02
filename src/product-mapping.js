@@ -86,27 +86,38 @@ function compareProductData(unleashedProductData, shopifyProduct) {
   };
 }
 
+function getAttributeValue(attributeSet, attributeName) {
+  if (!attributeSet || !attributeSet.Attributes) return null;
+  const attribute = attributeSet.Attributes.find(attr => attr.Name === attributeName);
+  return attribute ? attribute.Value : null;
+}
+
 function extractVariantOptions(attributeSet) {
   if (!attributeSet) return { option1: null, option2: null, option3: null };
   
   return {
-    option1: attributeSet['Option 1 Value'] || null,
-    option2: attributeSet['Option 2 Value'] || null,
-    option3: attributeSet['Option 3 Value'] || null
+    option1: getAttributeValue(attributeSet, 'Option 1 Value') || null,
+    option2: getAttributeValue(attributeSet, 'Option 2 Value') || null,
+    option3: getAttributeValue(attributeSet, 'Option 3 Value') || null
   };
 }
 
 function extractProductOptions(attributeSet) {
-  if (!attributeSet || !attributeSet['Option Names']) {
+  if (!attributeSet) {
     return [{ name: 'Title' }];
   }
   
-  const optionNames = parseOptionNames(attributeSet['Option Names']);
-  if (!optionNames.length) {
+  const optionNames = getAttributeValue(attributeSet, 'Option Names');
+  if (!optionNames) {
     return [{ name: 'Title' }];
   }
   
-  return optionNames.slice(0, 3).map(name => ({ name }));
+  const parsedNames = parseOptionNames(optionNames);
+  if (!parsedNames.length) {
+    return [{ name: 'Title' }];
+  }
+  
+  return parsedNames.slice(0, 3).map(name => ({ name }));
 }
 
 function groupUnleashedProducts(products) {
@@ -144,16 +155,18 @@ function groupUnleashedProducts(products) {
     console.log(`\n🔍 GROUPING DEBUG for "${product.ProductCode}" - "${product.ProductDescription}"`);
     console.log(`   AttributeSet exists: ${!!product.AttributeSet}`);
     if (product.AttributeSet) {
-      console.log(`   ProductTitle: "${product.AttributeSet.ProductTitle}"`);
-      console.log(`   Option 1 Value: "${product.AttributeSet['Option 1 Value']}"`);
-      console.log(`   Option 2 Value: "${product.AttributeSet['Option 2 Value']}"`);
-      console.log(`   Option 3 Value: "${product.AttributeSet['Option 3 Value']}"`);
-      console.log(`   Option Names: "${product.AttributeSet['Option Names']}"`);
+      console.log(`   ProductTitle: "${getAttributeValue(product.AttributeSet, 'Product Title')}"`);
+      console.log(`   Option 1 Value: "${getAttributeValue(product.AttributeSet, 'Option 1 Value')}"`);
+      console.log(`   Option 2 Value: "${getAttributeValue(product.AttributeSet, 'Option 2 Value')}"`);
+      console.log(`   Option 3 Value: "${getAttributeValue(product.AttributeSet, 'Option 3 Value')}"`);
+      console.log(`   Option Names: "${getAttributeValue(product.AttributeSet, 'Option Names')}"`);
     } else {
       console.log(`   No AttributeSet - will use ProductDescription as groupKey`);
     }
 
-    const groupKey = product.AttributeSet?.ProductTitle || product.ProductDescription;
+    const groupKey = product.AttributeSet ? 
+      getAttributeValue(product.AttributeSet, 'Product Title') || product.ProductDescription : 
+      product.ProductDescription;
     console.log(`   🎯 Final groupKey: "${groupKey}"`);
     
     if (!groups.has(groupKey)) {

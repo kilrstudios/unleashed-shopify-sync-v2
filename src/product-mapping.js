@@ -83,7 +83,7 @@ function compareProductData(unleashedProductData, shopifyProduct) {
   }
   
   // Check if image sync is needed (but don't include in differences)
-  if (unleashedProductData.images && unleashedProductData.images.length > 0) {
+  if (unleashedProductData.ImageUrl || (unleashedProductData.images && unleashedProductData.images.length > 0)) {
     needsPostSync.images = true;
   }
   

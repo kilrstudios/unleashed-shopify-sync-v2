@@ -34,8 +34,9 @@ async function generateSignature(queryString, apiKey) {
 // Helper: Create headers for Unleashed API requests
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
+  const path = url.pathname;
   const queryString = url.search ? url.search.substring(1) : '';
-  const signature = await generateSignature(queryString, apiKey);
+  const signature = await generateSignature(`GET&${path}${queryString ? '?' + queryString : ''}`, apiKey);
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -64,16 +65,9 @@ async function fetchStockOnHand(productCode, authData) {
       throw new Error('Missing Unleashed API credentials');
     }
     
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'api-auth-id': authData.apiId,
-      'api-auth-signature': await generateSignature(`GET&/StockOnHand/${productCode}`, authData.apiKey)
-    };
-    
     const response = await fetch(stockUrl, {
       method: 'GET',
-      headers
+      headers: await createUnleashedHeaders(stockUrl, authData.apiKey, authData.apiId)
     });
 
     if (!response.ok) {
@@ -119,16 +113,9 @@ async function fetchProductAttachments(productCode, authData) {
       throw new Error('Missing Unleashed API credentials');
     }
     
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'api-auth-id': authData.apiId,
-      'api-auth-signature': await generateSignature(`GET&/Products/${productCode}/Attachments`, authData.apiKey)
-    };
-    
     const response = await fetch(attachmentsUrl, {
       method: 'GET',
-      headers
+      headers: await createUnleashedHeaders(attachmentsUrl, authData.apiKey, authData.apiId)
     });
 
     if (!response.ok) {

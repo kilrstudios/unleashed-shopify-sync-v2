@@ -35,14 +35,28 @@ async function generateSignature(queryString, apiKey) {
 async function createUnleashedHeaders(endpoint, apiKey, apiId) {
   const url = new URL(endpoint);
   const path = url.pathname;
-  const signature = await generateSignature(`GET&${path}`, apiKey);
-  return {
+  const queryString = url.search ? url.search.substring(1) : '';
+  console.log('  🔗 URL parts:', {
+    full: endpoint,
+    path,
+    queryString
+  });
+  
+  // According to Unleashed docs, the signature should be METHOD&PATH[?QUERY]
+  const signatureInput = queryString ? `GET&${path}?${queryString}` : `GET&${path}`;
+  console.log('  🔐 Generating signature with input:', signatureInput);
+  const signature = await generateSignature(signatureInput, apiKey);
+  console.log('  🔑 Generated signature:', signature);
+  
+  const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     'api-auth-id': apiId,
     'api-auth-signature': signature,
     'Client-Type': 'kilr/unleashedshopify'
   };
+  console.log('  📤 Request headers:', headers);
+  return headers;
 }
 
 // Fetch stock on hand for a product

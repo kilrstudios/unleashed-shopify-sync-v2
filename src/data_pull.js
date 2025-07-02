@@ -121,7 +121,6 @@ async function fetchUnleashedData(authData) {
         ProductCode: sampleProduct.ProductCode,
         ProductDescription: sampleProduct.ProductDescription,
         DefaultSellPrice: sampleProduct.DefaultSellPrice,
-        Weight: sampleProduct.Weight,
         NeverDiminishing: sampleProduct.NeverDiminishing,
         IsSellable: sampleProduct.IsSellable,
         AttributeSet: sampleProduct.AttributeSet,
@@ -271,8 +270,6 @@ async function fetchShopifyData(authData) {
                       }
                     }
                   }
-                  weight
-                  weightUnit
                   metafields(first: 20) {
                     edges {
                       node {
@@ -311,8 +308,6 @@ async function fetchShopifyData(authData) {
         sku: edge.node.sku,
         price: edge.node.price,
         inventoryItem: edge.node.inventoryItem,
-        weight: edge.node.weight,
-        weightUnit: edge.node.weightUnit,
         metafields: edge.node.metafields.edges.map(mf => mf.node)
       }))
     }, null, 2));

@@ -193,6 +193,12 @@ function groupUnleashedProducts(products) {
 }
 
 async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = []) {
+  console.log('🚀 DEBUG: mapProducts function called with:', {
+    unleashedProductsCount: unleashedProducts.length,
+    shopifyProductsCount: shopifyProducts.length,
+    shopifyLocationsCount: shopifyLocations.length
+  });
+  
   const results = {
     toCreate: [],
     toUpdate: [],
@@ -242,7 +248,6 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
           [];
 
         // Prepare product data
-        console.log(`🔥 CREATING PRODUCT DATA for "${productTitle}"`);
         const productData = {
           handle,
           title: productTitle,
@@ -285,7 +290,6 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             optionNames.map(name => ({ name })) :
             [{ name: 'Title' }],
           variants: group.map(product => {
-            console.log(`🚨 MAPPING VARIANT: ${product.ProductCode} - START OF VARIANT MAPPING`);
             const variantOptions = extractVariantOptions(product.AttributeSet);
             
             // DEBUG: Verify StockOnHand data attachment

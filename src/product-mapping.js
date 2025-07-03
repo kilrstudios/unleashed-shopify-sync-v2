@@ -284,6 +284,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             optionNames.map(name => ({ name })) :
             [{ name: 'Title' }],
           variants: group.map(product => {
+            console.log(`🚨 MAPPING VARIANT: ${product.ProductCode} - START OF VARIANT MAPPING`);
             const variantOptions = extractVariantOptions(product.AttributeSet);
             
             // DEBUG: Verify StockOnHand data attachment

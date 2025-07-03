@@ -163,7 +163,12 @@
         .then(data => {
             console.log('Data received:', data);
             // Log the initial Unleashed & Shopify data for debugging
-            logInitialData(data);
+            // Check if this is a comprehensive sync response (has steps) or old format
+            if (data.steps && data.steps.dataFetch && data.steps.dataFetch.data) {
+                logInitialData(data.steps.dataFetch.data);
+            } else {
+                logInitialData(data);
+            }
             if (data.success) {
                 // Handle sync response (includes both mapping and mutation results)
                 const mapping = data.mappingResults;

@@ -30,9 +30,9 @@ async function updateProductImage(shopifyClient, productId, imageUrl, altText) {
     }
 
     const mutation = `
-      mutation productImageCreate($input: ProductImageInput!) {
-        productImageCreate(input: $input) {
-          image {
+      mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
+        productAppendImages(productId: $productId, images: $images) {
+          newImages {
             id
             url
             altText
@@ -46,16 +46,16 @@ async function updateProductImage(shopifyClient, productId, imageUrl, altText) {
     `;
 
     const variables = {
-      input: {
-        productId,
+      productId,
+      images: [{
         src: imageUrl,
         altText: altText || ''
-      }
+      }]
     };
 
-    console.log(`Creating new product image: ${imageUrl}`);
+    console.log(`Creating appending product image: ${imageUrl}`);
     const response = await shopifyClient.request(mutation, variables);
-    return response.productImageCreate;
+    return response.productAppendImages;
   } catch (error) {
     console.error('Error updating product image:', error);
     throw error;
@@ -128,7 +128,7 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
               results.images.successful.push({
                 productCode: unleashedProduct.ProductCode,
                 imageUrl: img.url,
-                imageId: response.image.id
+                imageId: response.newImages[0].id
               });
             }
           } catch (error) {

@@ -41,10 +41,10 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
       variantMediaInputs.push({ variantId: vId, mediaIds: [uploadedMedia[idx].id] });
     });
   } else {
-    // attach all images to each variant
-    const allMediaIds = uploadedMedia.map(m => m.id);
+    // Shopify only allows ONE mediaId per input → choose the first uploaded media for all variants
+    const primaryMediaId = uploadedMedia[0].id;
     variantIds.forEach(vId => {
-      variantMediaInputs.push({ variantId: vId, mediaIds: allMediaIds });
+      variantMediaInputs.push({ variantId: vId, mediaIds: [primaryMediaId] });
     });
   }
 

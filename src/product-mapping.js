@@ -207,7 +207,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
     const productGroups = groupUnleashedProducts(unleashedProducts);
 
     // Process each group (or single product)
-    for (const [groupKey, group] of productGroups.entries()) {
+    for (const [groupIndex, group] of productGroups.entries()) {
       try {
         const mainProduct = group[0];
         const isMultiVariant = group.length > 1;
@@ -445,7 +445,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
 
         results.processed++;
       } catch (error) {
-        console.error(`Error processing group ${groupKey}:`, error);
+        console.error(`Error processing group ${groupIndex}:`, error);
         results.errors.push({
           productCode: group[0].ProductCode,
           error: error.message

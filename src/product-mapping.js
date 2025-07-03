@@ -73,9 +73,13 @@ function compareProductData(unleashedProductData, shopifyProduct) {
       differences.push(`variant ${sku} tracking: ${shopifyTracked} → ${unleashedTracked}`);
     }
 
-    // Check if inventory sync is needed (but don't include in differences)
+    // Inventory comparison – if the variant is tracked we always treat inventory data
+    // as a change candidate so the product will be marked for UPDATE and the productSet
+    // mutation can carry absolute quantities to Shopify.
     if (unleashedVariant.inventory_management === 'shopify') {
+      // Mark that we intend to sync inventory and record a pseudo-diff so hasChanges === true
       needsPostSync.inventory = true;
+      differences.push(`variant ${sku} inventory quantities will be refreshed`);
     }
   }
   

@@ -29,6 +29,12 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
   const uploadErrors = uploadRes.productCreateMedia.mediaUserErrors || [];
   const uploadedMedia = uploadRes.productCreateMedia.media || [];
 
+  // Wait briefly for media to become ready
+  if (uploadedMedia.length > 0) {
+    console.log('⏳ Waiting 3s for media processing...');
+    await new Promise(res => setTimeout(res, 3000));
+  }
+
   // Map media to variants
   if (uploadedMedia.length === 0) {
     return { uploaded: uploadedMedia, linked: [], mediaUserErrors: uploadErrors };

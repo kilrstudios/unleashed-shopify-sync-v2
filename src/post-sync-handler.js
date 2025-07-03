@@ -29,10 +29,26 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
   const uploadErrors = uploadRes.productCreateMedia.mediaUserErrors || [];
   const uploadedMedia = uploadRes.productCreateMedia.media || [];
 
-  // Wait briefly for media to become ready
-  if (uploadedMedia.length > 0) {
-    console.log('⏳ Waiting 3s for media processing...');
-    await new Promise(res => setTimeout(res, 3000));
+  // Wait until all media are READY (Shopify returns MEDIA_PROCESSING initially)
+  async function waitForMediaReady(id, maxAttempts = 10, delayMs = 1000) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const statusQuery = `
+        query MediaStatus($id: ID!) {
+          node(id: $id) {
+            ... on MediaImage { id status }
+          }
+        }
+      `;
+      const res = await shopifyClient.request(statusQuery, { id });
+      const status = res.node?.status || 'READY';
+      if (status === 'READY') return true;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+    return false;
+  }
+
+  for (const m of uploadedMedia) {
+    await waitForMediaReady(m.id, 10, 1000);
   }
 
   // Map media to variants

@@ -264,13 +264,30 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
             mainProduct.ProductGroup?.GroupName
           ].filter(Boolean),
           images: group.reduce((allImages, product) => {
-            // Add images from Attachments
-            if (product.Attachments && product.Attachments.length > 0) {
-              allImages.push(...product.Attachments.map(attachment => ({
-                src: attachment.DownloadUrl,
-                alt: attachment.Description || `Image for ${product.ProductCode}`
+            // 1. Unleashed Images array (preferred)
+            if (product.Images && product.Images.length > 0) {
+              allImages.push(...product.Images.map(img => ({
+                src: img.Url,
+                alt: `Image for ${product.ProductCode}`
               })));
             }
+
+            // 2. Fallback to ImageUrl field on the product
+            if (product.ImageUrl) {
+              allImages.push({
+                src: product.ImageUrl,
+                alt: `Image for ${product.ProductCode}`
+              });
+            }
+
+            // 3. Legacy Attachments array (if ever used)
+            if (product.Attachments && product.Attachments.length > 0) {
+              allImages.push(...product.Attachments.map(att => ({
+                src: att.DownloadUrl || att.Url,
+                alt: att.Description || `Image for ${product.ProductCode}`
+              })));
+            }
+
             return allImages;
           }, []),
           options: isMultiVariant ? 

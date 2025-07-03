@@ -502,10 +502,10 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
 
         const variables = {
           input: {
-            locationId: update.locationId,
             name: "available",
             reason: "correction",
-            inventoryItemQuantities: [{
+            onHandQuantities: [{
+              locationId: update.locationId,
               inventoryItemId: update.inventoryItemId,
               availableQuantity: update.availableQuantity
             }]
@@ -520,12 +520,10 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
 
         const data = await response.json();
 
-        if (data.errors) {
-          throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
-        }
-
-        if (data.data.inventorySetQuantities.userErrors.length > 0) {
-          throw new Error(`Inventory update errors: ${JSON.stringify(data.data.inventorySetQuantities.userErrors)}`);
+        const userErrs = data.data.inventorySetQuantities.userErrors;
+        if (userErrs && userErrs.length > 0) {
+          console.warn(`⚠️ Inventory userErrors for ${update.inventoryItemId}:`, JSON.stringify(userErrs));
+          throw new Error(`Inventory userErrors: ${JSON.stringify(userErrs)}`);
         }
 
         results.successful.push({
@@ -1055,10 +1053,12 @@ async function handleInventoryUpdate(request, env) {
             query: mutation,
             variables: {
               input: {
-                locationId: update.locationId,
-                inventoryItemAdjustments: [{
+                name: "available",
+                reason: "correction",
+                onHandQuantities: [{
+                  locationId: update.locationId,
                   inventoryItemId: update.inventoryItemId,
-                  availableDelta: update.delta
+                  availableQuantity: update.availableQuantity
                 }]
               }
             }
@@ -1067,8 +1067,10 @@ async function handleInventoryUpdate(request, env) {
 
         const data = await response.json();
         
-        if (data.errors || data.data.inventorySetQuantities.userErrors.length > 0) {
-          throw new Error(`Inventory error: ${JSON.stringify(data.errors || data.data.inventorySetQuantities.userErrors)}`);
+        const userErrs = data.data.inventorySetQuantities.userErrors;
+        if (userErrs && userErrs.length > 0) {
+          console.warn(`⚠️ Inventory userErrors for ${update.inventoryItemId}:`, JSON.stringify(userErrs));
+          throw new Error(`Inventory userErrors: ${JSON.stringify(userErrs)}`);
         }
 
         results.successful.push(update);
@@ -1117,6 +1119,17 @@ async function handleImageUpdate(request, env) {
     // Process image attachments
     const results = { successful: [], failed: [] };
     
+    // Helper to reduce a filename like "foo_1024x.jpg" or CDN variants to its
+    // base key "foo.jpg" for reliable matching.
+    const baseKey = (fullPath) => {
+      const file = fullPath.split('/').pop().split('?')[0]; // filename.ext
+      const parts = file.split('.');
+      const ext = parts.pop();
+      const stem = parts.join('.');
+      const stemBase = stem.split('_')[0]; // strip Shopify size suffix
+      return `${stemBase}.${ext}`;
+    };
+
     for (const imageData of images) {
       try {
         const mutation = `
@@ -1751,15 +1764,20 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     const imageVariantMappings = [];
 
     for (const imageData of productData.images) {
-      // Match by **file name** as well because Shopify stores images on its CDN,
-      // which changes the domain part of the URL. We strip query params, take
-      // only the last path segment and compare that for a much more robust
-      // match.
-      const incomingFile = imageData.src.split('/').pop().split('?')[0];
-      const existingImage = existingImages.find(img => {
-        const existingFile = img.originalSrc.split('/').pop().split('?')[0];
-        return existingFile === incomingFile;
-      });
+      // Helper to reduce a filename like "foo_1024x.jpg" or CDN variants to its
+      // base key "foo.jpg" for reliable matching.
+      const baseKey = (fullPath) => {
+        const file = fullPath.split('/').pop().split('?')[0]; // filename.ext
+        const parts = file.split('.');
+        const ext = parts.pop();
+        const stem = parts.join('.');
+        const stemBase = stem.split('_')[0]; // strip Shopify size suffix
+        return `${stemBase}.${ext}`;
+      };
+
+      const incomingKey = baseKey(imageData.src);
+
+      const existingImage = existingImages.find(img => baseKey(img.originalSrc) === incomingKey);
       
       if (existingImage) {
         console.log(`✅ Image already exists: ${imageData.src}`);

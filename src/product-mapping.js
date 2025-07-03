@@ -354,6 +354,8 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                 }
               },
               inventoryQuantities: inventoryQuantities,
+              // Alias for compatibility with productSet builder
+              inventory_levels: inventoryQuantities,
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,

@@ -389,10 +389,6 @@ export async function handleComprehensiveSync(request, env) {
           results.steps.postSync = {
             success: true,
             duration: `${((Date.now() - postSyncStepStart) / 1000).toFixed(2)}s`,
-            inventory: {
-              successful: postSyncResults.inventory.successful.length,
-              failed: postSyncResults.inventory.failed.length
-            },
             images: {
               successful: postSyncResults.images.successful.length,
               failed: postSyncResults.images.failed.length
@@ -400,7 +396,6 @@ export async function handleComprehensiveSync(request, env) {
           };
           
           console.log('✅ Post-sync operations completed:', {
-            inventory: `${postSyncResults.inventory.successful.length} successful, ${postSyncResults.inventory.failed.length} failed`,
             images: `${postSyncResults.images.successful.length} successful, ${postSyncResults.images.failed.length} failed`
           });
           results.summary.successfulOperations++;
@@ -449,7 +444,7 @@ export async function handleComprehensiveSync(request, env) {
       
       if (results.steps.postSync?.success) {
         const postSync = results.steps.postSync;
-        console.log(`🔄 Post-Sync: ${postSync.inventory.successful} inventory updates, ${postSync.images.successful} image updates`);
+        console.log(`🔄 Post-Sync: ${postSync.images.successful} image updates`);
       }
 
       return jsonResponse(results);

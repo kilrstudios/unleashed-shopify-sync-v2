@@ -116,6 +116,36 @@ function buildProductSetInput(productData, isUpdate = false) {
         variantInput.optionValues = optionValues.length > 0 ? optionValues : [{ optionName: "Title", name: "Default Title" }];
       }
 
+      // Add inventory quantities for each location (supports both inventory_levels and inventoryQuantities aliases)
+      const invLevels = variant.inventory_levels || variant.inventoryQuantities;
+      if (invLevels && shopifyLocations) {
+        variantInput.inventoryQuantities = [];
+
+        invLevels.forEach(level => {
+          const availableVal = level.available ?? level.quantity;
+          if (availableVal === undefined) return;
+
+          // locationId may be stored as location_id (numeric) or locationId (GID)
+          const locMatch = shopifyLocations.find(loc => {
+            const locNumeric = extractNumericId(loc.id);
+            return (
+              loc.id === level.locationId ||
+              loc.id === level.location_id ||
+              locNumeric === level.location_id ||
+              locNumeric === level.locationId
+            );
+          });
+
+          if (locMatch) {
+            variantInput.inventoryQuantities.push({
+              locationId: locMatch.id,
+              name: "available",
+              quantity: parseInt(availableVal) || 0
+            });
+          }
+        });
+      }
+
       return variantInput;
     })
   };
@@ -1424,24 +1454,32 @@ function buildComprehensiveProductSetInput(productData, shopifyLocations, isUpda
       variantInput.inventoryItem.cost = variant.cost.toString();
     }
 
-    // Add inventory quantities for each location - matching your example format
-    if (variant.inventory_levels && shopifyLocations) {
+    // Add inventory quantities for each location (supports both inventory_levels and inventoryQuantities aliases)
+    const invLevels = variant.inventory_levels || variant.inventoryQuantities;
+    if (invLevels && shopifyLocations) {
       variantInput.inventoryQuantities = [];
-      
-      variant.inventory_levels.forEach(level => {
-        if (level.available !== undefined) {
-          const location = shopifyLocations.find(loc => 
-            loc.id === level.location_id || 
-            extractNumericId(loc.id) === level.location_id
+
+      invLevels.forEach(level => {
+        const availableVal = level.available ?? level.quantity;
+        if (availableVal === undefined) return;
+
+        // locationId may be stored as location_id (numeric) or locationId (GID)
+        const locMatch = shopifyLocations.find(loc => {
+          const locNumeric = extractNumericId(loc.id);
+          return (
+            loc.id === level.locationId ||
+            loc.id === level.location_id ||
+            locNumeric === level.location_id ||
+            locNumeric === level.locationId
           );
-          
-          if (location) {
-            variantInput.inventoryQuantities.push({
-              locationId: location.id,  // Keep the full GID format
-              name: "available",        // Use "available" as the name like in your example
-              quantity: parseInt(level.available) || 0
-            });
-          }
+        });
+
+        if (locMatch) {
+          variantInput.inventoryQuantities.push({
+            locationId: locMatch.id,
+            name: "available",
+            quantity: parseInt(availableVal) || 0
+          });
         }
       });
     }

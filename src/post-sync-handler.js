@@ -1,69 +1,76 @@
 import { getProductById } from './product-mutations';
 
-async function updateProductImage(shopifyClient, productId, imageUrl, altText) {
-  try {
-    // First check if image already exists
-    const query = `
-      query getProductImages($productId: ID!) {
-        product(id: $productId) {
-          images(first: 50) {
-            edges {
-              node {
-                id
-                url
-                altText
-              }
-            }
-          }
-        }
-      }
-    `;
+async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, images) {
+  if (images.length === 0) return { uploaded: [], linked: [], mediaUserErrors: [] };
 
-    const imagesResponse = await shopifyClient.request(query, { productId });
-    const existingImages = imagesResponse.product.images.edges;
-    
-    // Check if image with same URL already exists
-    const existingImage = existingImages.find(edge => edge.node.url === imageUrl);
-    if (existingImage) {
-      console.log('Image already exists, skipping upload');
-      return { success: true, imageExists: true, image: existingImage.node };
+  // 1) Upload images via productCreateMedia
+  const uploadMutation = `
+    mutation ProductCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $productId, media: $media) {
+        media {
+          ... on MediaImage { id alt image { url } }
+        }
+        mediaUserErrors { field message }
+      }
     }
+  `;
 
-    const mutation = `
-      mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-        productCreateMedia(productId: $productId, media: $media) {
-          media {
-            ... on MediaImage {
-              id
-              image {
-                url
-                altText
-              }
-            }
-          }
-          mediaUserErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
+  const mediaInputs = images.map(img => ({
+    mediaContentType: "IMAGE",
+    originalSource: img.url,
+    alt: img.alt || ''
+  }));
 
-    const variables = {
-      productId,
-      media: [{
-        originalSource: imageUrl,
-        alt: altText || ''
-      }]
-    };
+  const uploadRes = await shopifyClient.request(uploadMutation, {
+    productId,
+    media: mediaInputs
+  });
 
-    console.log(`Uploading product image via productCreateMedia: ${imageUrl}`);
-    const response = await shopifyClient.request(mutation, variables);
-    return response.productCreateMedia;
-  } catch (error) {
-    console.error('Error updating product image:', error);
-    throw error;
+  const uploadErrors = uploadRes.productCreateMedia.mediaUserErrors || [];
+  const uploadedMedia = uploadRes.productCreateMedia.media || [];
+
+  // Map media to variants
+  if (uploadedMedia.length === 0) {
+    return { uploaded: uploadedMedia, linked: [], mediaUserErrors: uploadErrors };
   }
+
+  const variantMediaInputs = [];
+  if (variantIds.length === uploadedMedia.length) {
+    // one-to-one by index
+    variantIds.forEach((vId, idx) => {
+      variantMediaInputs.push({ variantId: vId, mediaIds: [uploadedMedia[idx].id] });
+    });
+  } else {
+    // attach all images to each variant
+    const allMediaIds = uploadedMedia.map(m => m.id);
+    variantIds.forEach(vId => {
+      variantMediaInputs.push({ variantId: vId, mediaIds: allMediaIds });
+    });
+  }
+
+  // 2) Link media to variants
+  const linkMutation = `
+    mutation ProductVariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+      productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+        productVariants {
+          id
+          image { url }
+        }
+        userErrors { field message }
+      }
+    }
+  `;
+
+  const linkRes = await shopifyClient.request(linkMutation, {
+    productId,
+    variantMedia: variantMediaInputs
+  });
+
+  return {
+    uploaded: uploadedMedia,
+    linked: linkRes.productVariantAppendMedia.productVariants,
+    mediaUserErrors: [...uploadErrors, ...(linkRes.productVariantAppendMedia.userErrors || [])]
+  };
 }
 
 async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopifyProducts) {
@@ -111,38 +118,36 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
 
       if (imageSources.length > 0) {
         console.log(`\n🖼️ Processing images for product ${unleashedProduct.ProductCode}...`);
-        for (const img of imageSources) {
-          try {
-            const response = await updateProductImage(
-              shopifyClient,
-              shopifyProduct.id,
-              img.url,
-              img.alt
-            );
 
-            if (response.mediaUserErrors?.length > 0) {
-              console.error(`❌ Failed to update image:`, response.mediaUserErrors);
-              results.images.failed.push({
-                productCode: unleashedProduct.ProductCode,
-                imageUrl: img.url,
-                errors: response.mediaUserErrors
-              });
-            } else {
-              console.log(`✅ Successfully updated image`);
-              results.images.successful.push({
-                productCode: unleashedProduct.ProductCode,
-                imageUrl: img.url,
-                imageId: response.media[0].id
-              });
-            }
-          } catch (error) {
-            console.error(`❌ Error updating image for ${unleashedProduct.ProductCode}:`, error);
+        try {
+          const variantIds = shopifyProduct.variants.map(v => v.id);
+          const uploadResult = await uploadAndLinkProductImages(
+            shopifyClient,
+            shopifyProduct.id,
+            variantIds,
+            imageSources
+          );
+
+          if (uploadResult.mediaUserErrors.length > 0) {
+            console.error('❌ Image processing errors:', uploadResult.mediaUserErrors);
             results.images.failed.push({
               productCode: unleashedProduct.ProductCode,
-              imageUrl: img.url,
-              error: error.message
+              errors: uploadResult.mediaUserErrors
+            });
+          } else {
+            console.log('✅ Images uploaded & linked');
+            results.images.successful.push({
+              productCode: unleashedProduct.ProductCode,
+              uploaded: uploadResult.uploaded.length,
+              linked: uploadResult.linked.length
             });
           }
+        } catch (error) {
+          console.error(`❌ Image processing failed for ${unleashedProduct.ProductCode}:`, error);
+          results.images.failed.push({
+            productCode: unleashedProduct.ProductCode,
+            error: error.message
+          });
         }
       }
     }

@@ -167,9 +167,23 @@ function groupUnleashedProducts(products) {
       continue;
     }
 
+    // Debug: Log AttributeSet data for grouping analysis
+    console.log(`\n🔍 GROUPING DEBUG for "${product.ProductCode}" - "${product.ProductDescription}"`);
+    console.log(`   AttributeSet exists: ${!!product.AttributeSet}`);
+    if (product.AttributeSet) {
+      console.log(`   ProductTitle: "${getAttributeValue(product.AttributeSet, 'Product Title')}"`);
+      console.log(`   Option 1 Value: "${getAttributeValue(product.AttributeSet, 'Option 1 Value')}"`);
+      console.log(`   Option 2 Value: "${getAttributeValue(product.AttributeSet, 'Option 2 Value')}"`);
+      console.log(`   Option 3 Value: "${getAttributeValue(product.AttributeSet, 'Option 3 Value')}"`);
+      console.log(`   Option Names: "${getAttributeValue(product.AttributeSet, 'Option Names')}"`);
+    } else {
+      console.log(`   No AttributeSet - will use ProductDescription as groupKey`);
+    }
+
     const groupKey = product.AttributeSet ? 
       getAttributeValue(product.AttributeSet, 'Product Title') || product.ProductDescription : 
       product.ProductDescription;
+    console.log(`   🎯 Final groupKey: "${groupKey}"`);
     
     if (!groups.has(groupKey)) {
       console.log(`   🆕 Creating new group: "${groupKey}"`);
@@ -193,12 +207,6 @@ function groupUnleashedProducts(products) {
 }
 
 async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = []) {
-  console.log('🚀 DEBUG: mapProducts function called with:', {
-    unleashedProductsCount: unleashedProducts.length,
-    shopifyProductsCount: shopifyProducts.length,
-    shopifyLocationsCount: shopifyLocations.length
-  });
-  
   const results = {
     toCreate: [],
     toUpdate: [],
@@ -213,7 +221,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
     const productGroups = groupUnleashedProducts(unleashedProducts);
 
     // Process each group (or single product)
-    for (const [groupIndex, group] of productGroups.entries()) {
+    for (const [groupKey, group] of productGroups.entries()) {
       try {
         const mainProduct = group[0];
         const isMultiVariant = group.length > 1;
@@ -292,24 +300,11 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
           variants: group.map(product => {
             const variantOptions = extractVariantOptions(product.AttributeSet);
             
-            // DEBUG: Verify StockOnHand data attachment
-            console.log(`🔍 VARIANT DEBUG for ${product.ProductCode}:`);
-            console.log(`   Product has StockOnHand:`, !!product.StockOnHand);
-            console.log(`   StockOnHand length:`, product.StockOnHand?.length || 0);
-            console.log(`   Is sellable:`, product.IsSellable);
-            console.log(`   Never diminishing:`, product.NeverDiminishing);
-            console.log(`   Will track inventory:`, (!product.NeverDiminishing && product.IsSellable));
-            
             // Calculate inventory quantities for each location
             const inventoryQuantities = [];
-            console.log(`   📦 Processing inventory for variant ${product.ProductCode}:`);
-            console.log(`   📦 StockOnHand data:`, product.StockOnHand);
-            console.log(`   📦 Available locations:`, shopifyLocations.map(l => ({ id: l.id, warehouse_code: l.metafields?.["custom.warehouse_code"] })));
-            
             if (product.StockOnHand && product.StockOnHand.length > 0) {
               product.StockOnHand.forEach(stock => {
                 const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
-                console.log(`   📦 Processing stock entry:`, { warehouseCode, stock });
                 if (!warehouseCode) return; // skip if no code
 
                 // Attempt to find matching Shopify location by custom.warehouse_code metafield
@@ -320,24 +315,31 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                   );
                 });
 
-                console.log(`   📦 Matching location for ${warehouseCode}:`, matchingLocation ? { id: matchingLocation.id, name: matchingLocation.name } : 'NOT FOUND');
-
                 if (!matchingLocation) {
                   // Skip inventory for unknown warehouse code to prevent errors
                   console.warn(`⚠️ No Shopify location with warehouse_code "${warehouseCode}" – skipping inventory quantity for ${product.ProductCode}`);
                   return;
                 }
 
-                // Prefer QuantityAvailable, then fallbacks
+                // Determine available quantity, supporting multiple possible field names from Unleashed
                 const qty = parseInt(
                   stock.QuantityAvailable ??
+                  stock.QtyAvailable ?? // NEW – some tenants use this field name
                   stock.AvailableQty ??
                   stock.QuantityOnHand ??
                   stock.QtyOnHand ??
                   0
                 );
 
-                console.log(`   📦 Adding inventory: locationId=${matchingLocation.id}, quantity=${qty}`);
+                // Debug: log how each warehouse row maps to a Shopify location & quantity
+                console.log(
+                  'INV MAP',
+                  product.ProductCode,
+                  '| Warehouse', warehouseCode,
+                  '→', matchingLocation ? matchingLocation.id : 'NO-MATCH',
+                  '| qty', qty
+                );
+
                 inventoryQuantities.push({
                   locationId: matchingLocation.id,
                   name: "available",
@@ -345,7 +347,6 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                 });
               });
             }
-            console.log(`   📦 Final inventoryQuantities:`, inventoryQuantities);
             
             return {
               sku: product.ProductCode,
@@ -451,7 +452,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
 
         results.processed++;
       } catch (error) {
-        console.error(`Error processing group ${groupIndex}:`, error);
+        console.error(`Error processing group ${groupKey}:`, error);
         results.errors.push({
           productCode: group[0].ProductCode,
           error: error.message

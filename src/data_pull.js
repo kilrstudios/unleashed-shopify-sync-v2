@@ -162,7 +162,23 @@ async function fetchUnleashedData(authData) {
     
     // Debug first product's data structure on first page
     if (currentPage === 1 && products.length > 0) {
-      console.log(`📊 First product: ${products[0].ProductCode} - AttributeSet: ${!!products[0].AttributeSet}`);
+      console.log(`\n📊 PRODUCT DATA STRUCTURE DEBUG - Sample from bulk endpoint:`)
+      console.log(`   ProductCode: ${products[0].ProductCode}`);
+      console.log(`   ProductDescription: ${products[0].ProductDescription}`);
+      console.log(`   AttributeSet exists: ${!!products[0].AttributeSet}`);
+      console.log(`   Attributes exists: ${!!products[0].Attributes}`);
+      
+      if (products[0].AttributeSet) {
+        console.log(`   AttributeSet:`, typeof products[0].AttributeSet === 'string' ? products[0].AttributeSet : JSON.stringify(products[0].AttributeSet, null, 2));
+      }
+      
+      if (products[0].Attributes) {
+        console.log(`   Attributes:`, JSON.stringify(products[0].Attributes, null, 2));
+      }
+      
+      if (!products[0].AttributeSet && !products[0].Attributes) {
+        console.log(`   Available fields:`, Object.keys(products[0]));
+      }
     }
     
     // Attachments placeholder (stock fetched in bulk later)

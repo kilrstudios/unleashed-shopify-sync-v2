@@ -3,6 +3,23 @@ import { getProductById } from './product-mutations';
 async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, images) {
   if (images.length === 0) return { uploaded: [], linked: [], mediaUserErrors: [] };
 
+  // Deduplicate against existing images on the product first
+  const existingImgsRes = await shopifyClient.request(
+    `query GetImages($id: ID!) { product(id: $id) { images(first: 100) { edges { node { id originalSrc } } } } }`,
+    { id: productId }
+  );
+
+  const existingSrcSet = new Set(
+    existingImgsRes?.product?.images?.edges?.map(e => e.node.originalSrc) || []
+  );
+
+  const imagesToProcess = images.filter(img => !existingSrcSet.has(img.url));
+
+  if (imagesToProcess.length === 0) {
+    console.log('🖼️ All images already exist on product – skipping upload');
+    return { uploaded: [], linked: [], mediaUserErrors: [] };
+  }
+
   // 1) Upload images via productCreateMedia
   const uploadMutation = `
     mutation ProductCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
@@ -15,7 +32,7 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
     }
   `;
 
-  const mediaInputs = images.map(img => ({
+  const mediaInputs = imagesToProcess.map(img => ({
     mediaContentType: "IMAGE",
     originalSource: img.url,
     alt: img.alt || ''

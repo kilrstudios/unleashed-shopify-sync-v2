@@ -357,9 +357,9 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
               compare_at_price: null,
               weight: product.Weight || 0,
               weight_unit: 'KILOGRAMS',
-              inventory_management: (!product.NeverDiminishing && product.IsSellable) ? 'shopify' : null,
+              inventory_management: product.IsSellable ? 'shopify' : null,
               inventoryItem: {
-                tracked: (!product.NeverDiminishing && product.IsSellable),
+                tracked: product.IsSellable,
                 measurement: {
                   weight: {
                     value: parseFloat(product.Weight) || 0,

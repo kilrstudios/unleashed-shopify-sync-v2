@@ -478,18 +478,15 @@ async function parseBulkOperationResults(resultUrl) {
 
 // Update inventory for variants
 async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
-  const results = {
-    successful: [],
-    failed: []
-  };
+  const results = { successful: [], failed: [] };
 
   console.log(`📦 Starting inventory updates for ${inventoryUpdates.length} items...`);
 
-  // Process inventory updates in batches
+  // Shopify allows multiple inventory item quantities per call, but to keep
+  // the JSON payload tiny we'll push them one-by-one in small batches.
   const batchSize = 10;
   for (let i = 0; i < inventoryUpdates.length; i += batchSize) {
     const batch = inventoryUpdates.slice(i, i + batchSize);
-    
     console.log(`📦 Processing inventory batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(inventoryUpdates.length / batchSize)}`);
 
     const batchPromises = batch.map(async (update) => {
@@ -497,19 +494,8 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         const mutation = `
           mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
             inventorySetQuantities(input: $input) {
-              inventoryAdjustmentGroup {
-                id
-                changes {
-                  item {
-                    id
-                  }
-                  delta
-                }
-              }
-              userErrors {
-                field
-                message
-              }
+              inventoryAdjustmentGroup { id }
+              userErrors { field message }
             }
           }
         `;
@@ -517,9 +503,11 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         const variables = {
           input: {
             locationId: update.locationId,
-            inventoryItemAdjustments: [{
+            name: "available",
+            reason: "correction",
+            inventoryItemQuantities: [{
               inventoryItemId: update.inventoryItemId,
-              availableDelta: update.delta
+              availableQuantity: update.availableQuantity
             }]
           }
         };
@@ -527,14 +515,11 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         const response = await fetch(`${baseUrl}/graphql.json`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            query: mutation,
-            variables
-          })
+          body: JSON.stringify({ query: mutation, variables })
         });
 
         const data = await response.json();
-        
+
         if (data.errors) {
           throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
         }
@@ -546,8 +531,7 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         results.successful.push({
           inventoryItemId: update.inventoryItemId,
           locationId: update.locationId,
-          delta: update.delta,
-          adjustmentGroupId: data.data.inventorySetQuantities.inventoryAdjustmentGroup.id
+          availableQuantity: update.availableQuantity
         });
 
       } catch (error) {
@@ -555,17 +539,16 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         results.failed.push({
           inventoryItemId: update.inventoryItemId,
           locationId: update.locationId,
-          delta: update.delta,
+          availableQuantity: update.availableQuantity,
           error: error.message
         });
       }
     });
 
     await Promise.all(batchPromises);
-    
-    // Brief delay between batches to avoid rate limiting
+
     if (i + batchSize < inventoryUpdates.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(res => setTimeout(res, 500));
     }
   }
 
@@ -1592,9 +1575,33 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
     updated: { successful: [], failed: [] },
     archived: { successful: [], failed: [] },
     images: { successful: [], failed: [] },
+    inventory: { successful: [], failed: [] },
     errors: [],
-    summary: { created: 0, updated: 0, archived: 0, failed: 0, imagesProcessed: 0, imagesFailed: 0 }
+    summary: { created: 0, updated: 0, archived: 0, failed: 0, imagesProcessed: 0, imagesFailed: 0, inventoryPushed: 0, inventoryFailed: 0 }
   };
+
+  // Helper to translate product+variant info into inventory updates
+  function buildInventoryUpdates(resultProduct, sourceProduct) {
+    const updates = [];
+    if (!resultProduct || !resultProduct.variants || !sourceProduct?.variants) return updates;
+
+    resultProduct.variants.edges.forEach(edge => {
+      const sku = edge.node.sku;
+      const inventoryItemId = edge.node.inventoryItem?.id;
+      const variantData = sourceProduct.variants.find(v => v.sku === sku);
+      if (!inventoryItemId || !variantData?.inventoryQuantities?.length) return;
+      variantData.inventoryQuantities.forEach(iq => {
+        const qty = parseInt(iq.quantity) || 0;
+        if (qty === 0) return; // nothing to push
+        updates.push({
+          inventoryItemId,
+          locationId: iq.locationId,
+          availableQuantity: qty
+        });
+      });
+    });
+    return updates;
+  }
 
   // Process product creations
   console.log(`🆕 Processing ${mappingResults.toCreate.length} products to create...`);
@@ -1623,6 +1630,16 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
           });
           results.summary.imagesFailed++;
         }
+      }
+      
+      // --- Push inventory levels ---
+      const inventoryUpdates = buildInventoryUpdates(result.product, product);
+      if (inventoryUpdates.length > 0) {
+        const invRes = await updateInventoryLevels(baseUrl, headers, inventoryUpdates);
+        results.inventory.successful.push(...invRes.successful);
+        results.inventory.failed.push(...invRes.failed);
+        results.summary.inventoryPushed += invRes.successful.length;
+        results.summary.inventoryFailed += invRes.failed.length;
       }
       
       console.log(`✅ Created product: ${product.title}`);
@@ -1668,6 +1685,16 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
           });
           results.summary.imagesFailed++;
         }
+      }
+      
+      // --- Push inventory levels ---
+      const inventoryUpdates = buildInventoryUpdates(result.product, product);
+      if (inventoryUpdates.length > 0) {
+        const invRes = await updateInventoryLevels(baseUrl, headers, inventoryUpdates);
+        results.inventory.successful.push(...invRes.successful);
+        results.inventory.failed.push(...invRes.failed);
+        results.summary.inventoryPushed += invRes.successful.length;
+        results.summary.inventoryFailed += invRes.failed.length;
       }
       
       console.log(`✅ Updated product: ${product.title}`);
@@ -1724,8 +1751,15 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     const imageVariantMappings = [];
 
     for (const imageData of productData.images) {
-      // Check if image already exists (by comparing src URL)
-      const existingImage = existingImages.find(img => img.originalSrc === imageData.src);
+      // Match by **file name** as well because Shopify stores images on its CDN,
+      // which changes the domain part of the URL. We strip query params, take
+      // only the last path segment and compare that for a much more robust
+      // match.
+      const incomingFile = imageData.src.split('/').pop().split('?')[0];
+      const existingImage = existingImages.find(img => {
+        const existingFile = img.originalSrc.split('/').pop().split('?')[0];
+        return existingFile === incomingFile;
+      });
       
       if (existingImage) {
         console.log(`✅ Image already exists: ${imageData.src}`);

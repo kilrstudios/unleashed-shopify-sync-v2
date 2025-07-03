@@ -1539,7 +1539,9 @@ async function executeComprehensiveProductSet(baseUrl, headers, productData, sho
   const input = buildComprehensiveProductSetInput(productData, shopifyLocations, isUpdate);
   
   console.log(`🔄 Executing comprehensive productSet for: ${productData.title}`);
-  
+  console.log(`🔍 ProductSet Input for ${productData.title}:`, JSON.stringify(input, null, 2));
+  console.log(`🔍 Variant inventory data:`, input.variants.map(v => ({ sku: v.sku, inventoryQuantities: v.inventoryQuantities })));
+
   const response = await fetch(`${baseUrl}/graphql.json`, {
     method: 'POST',
     headers,

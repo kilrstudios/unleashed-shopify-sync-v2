@@ -415,19 +415,25 @@
         // Additional logging: Stock on Hand per location per product
         if (unleashed && Array.isArray(unleashed.products)) {
             console.group('%c📦 Stock On Hand by Product & Location', 'color: #FF5722; font-weight: bold');
-            unleashed.products.forEach((product, idx) => {
-                const stock = product.StockOnHand || [];
-                if (stock.length === 0) return; // skip if no stock rows
-
-                console.groupCollapsed(`%c${idx + 1}. ${product.ProductCode} - ${product.ProductDescription}`, 'color: #03A9F4');
-                stock.forEach(row => {
-                    const warehouseCode = row.WarehouseCode || (row.Warehouse && row.Warehouse.WarehouseCode) || 'Unknown';
-                    const qty = row.QuantityAvailable ?? row.AvailableQty ?? row.QuantityOnHand ?? row.QtyOnHand ?? 0;
-                    console.log(`${warehouseCode}: ${qty}`);
+            const productsWithStock = unleashed.products.filter(p => p.StockOnHand && p.StockOnHand.length > 0);
+            console.log(`Found ${productsWithStock.length} products with stock data:`);
+            
+            productsWithStock.forEach(product => {
+                console.group(`${product.ProductCode} - ${product.ProductDescription}`);
+                product.StockOnHand.forEach(stock => {
+                    const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode || 'Unknown';
+                    const qty = stock.QuantityAvailable ?? stock.QuantityOnHand ?? stock.QtyOnHand ?? 0;
+                    console.log(`📍 ${warehouseCode}: ${qty} available`);
                 });
                 console.groupEnd();
             });
+            
+            if (productsWithStock.length === 0) {
+                console.log('❌ No product stock data found in unleashed.products');
+            }
             console.groupEnd();
+        } else {
+            console.log('⚠️ Unleashed products data not present or not an array');
         }
 
         console.groupEnd();

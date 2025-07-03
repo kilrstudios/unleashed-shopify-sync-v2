@@ -167,23 +167,9 @@ function groupUnleashedProducts(products) {
       continue;
     }
 
-    // Debug: Log AttributeSet data for grouping analysis
-    console.log(`\n🔍 GROUPING DEBUG for "${product.ProductCode}" - "${product.ProductDescription}"`);
-    console.log(`   AttributeSet exists: ${!!product.AttributeSet}`);
-    if (product.AttributeSet) {
-      console.log(`   ProductTitle: "${getAttributeValue(product.AttributeSet, 'Product Title')}"`);
-      console.log(`   Option 1 Value: "${getAttributeValue(product.AttributeSet, 'Option 1 Value')}"`);
-      console.log(`   Option 2 Value: "${getAttributeValue(product.AttributeSet, 'Option 2 Value')}"`);
-      console.log(`   Option 3 Value: "${getAttributeValue(product.AttributeSet, 'Option 3 Value')}"`);
-      console.log(`   Option Names: "${getAttributeValue(product.AttributeSet, 'Option Names')}"`);
-    } else {
-      console.log(`   No AttributeSet - will use ProductDescription as groupKey`);
-    }
-
     const groupKey = product.AttributeSet ? 
       getAttributeValue(product.AttributeSet, 'Product Title') || product.ProductDescription : 
       product.ProductDescription;
-    console.log(`   🎯 Final groupKey: "${groupKey}"`);
     
     if (!groups.has(groupKey)) {
       console.log(`   🆕 Creating new group: "${groupKey}"`);
@@ -302,9 +288,14 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             
             // Calculate inventory quantities for each location
             const inventoryQuantities = [];
+            console.log(`   📦 Processing inventory for variant ${product.ProductCode}:`);
+            console.log(`   📦 StockOnHand data:`, product.StockOnHand);
+            console.log(`   📦 Available locations:`, shopifyLocations.map(l => ({ id: l.id, warehouse_code: l.metafields?.["custom.warehouse_code"] })));
+            
             if (product.StockOnHand && product.StockOnHand.length > 0) {
               product.StockOnHand.forEach(stock => {
                 const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
+                console.log(`   📦 Processing stock entry:`, { warehouseCode, stock });
                 if (!warehouseCode) return; // skip if no code
 
                 // Attempt to find matching Shopify location by custom.warehouse_code metafield
@@ -314,6 +305,8 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                     loc.metafields["custom.warehouse_code"] === warehouseCode
                   );
                 });
+
+                console.log(`   📦 Matching location for ${warehouseCode}:`, matchingLocation ? { id: matchingLocation.id, name: matchingLocation.name } : 'NOT FOUND');
 
                 if (!matchingLocation) {
                   // Skip inventory for unknown warehouse code to prevent errors
@@ -330,6 +323,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                   0
                 );
 
+                console.log(`   📦 Adding inventory: locationId=${matchingLocation.id}, quantity=${qty}`);
                 inventoryQuantities.push({
                   locationId: matchingLocation.id,
                   name: "available",
@@ -337,6 +331,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                 });
               });
             }
+            console.log(`   📦 Final inventoryQuantities:`, inventoryQuantities);
             
             return {
               sku: product.ProductCode,

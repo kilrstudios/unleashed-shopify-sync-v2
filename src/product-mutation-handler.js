@@ -95,7 +95,7 @@ export async function handleProductMutations(request, env) {
 
     // Perform product mapping
     console.log('🗺️ Starting product mapping for mutations...');
-    const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
+    const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
     
     // Execute product mutations
     console.log('🔄 Starting product mutations...');
@@ -154,7 +154,7 @@ export async function handleProductSync(request, env) {
 
     // Map products
     console.log(`🗺️ Step 4a: Mapping products...`);
-    const mappingResults = await mapProducts(unleashedProducts, shopifyProducts);
+    const mappingResults = await mapProducts(unleashedProducts, shopifyProducts, shopifyLocations);
 
     // Execute mutations
     console.log(`🔄 Step 4b: Executing product mutations...`);
@@ -221,7 +221,7 @@ async function executeProductMutations(shopifyClient, mappingResults) {
         } catch (error) {
           console.error(`❌ Error creating product "${productData.title}":`, error);
           results.errors++;
-          }
+        }
       }
     }
 
@@ -261,7 +261,7 @@ async function executeProductMutations(shopifyClient, mappingResults) {
             console.error(`❌ Failed to archive product:`, response.userErrors);
             results.errors++;
           } else {
-            console.log(`✅ Archived product: ${response.product.title}`);
+            console.log(`✅ Archived product: ${productData.title}`);
             results.archived++;
           }
         } catch (error) {
@@ -273,7 +273,7 @@ async function executeProductMutations(shopifyClient, mappingResults) {
     }
 
     console.log(`✅ === DIRECT PRODUCT MUTATIONS COMPLETE ===`);
-    console.log(`✅ Product sync completed: Products: ${results.created} created, ${results.updated} updated, ${results.archived} archived (direct). Errors: ${results.errors}`);
+    console.log(`Products: ${results.created} created, ${results.updated} updated, ${results.archived} archived. Errors: ${results.errors}`);
 
     return results;
   } catch (error) {
@@ -284,4 +284,4 @@ async function executeProductMutations(shopifyClient, mappingResults) {
 
 export {
   executeProductMutations
-}; 
+};

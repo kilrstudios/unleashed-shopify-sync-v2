@@ -253,7 +253,7 @@ export async function handleComprehensiveSync(request, env) {
       try {
         // Map products
         console.log('🗺️ Step 4a: Mapping products...');
-        const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products);
+        const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
         
         // Execute product mutations (using comprehensive productSet approach)
         console.log('🔄 Step 4b: Executing product mutations...');

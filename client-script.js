@@ -412,25 +412,24 @@
             console.log('⚠️ Shopify data not present in response');
         }
 
-        // Extra: log stock on hand per product/location for debugging
+        // Additional logging: Stock on Hand per location per product
         if (unleashed && Array.isArray(unleashed.products)) {
-            console.group('%c📦 Stock on Hand per Product', 'color: #FFC107; font-weight:bold');
-            unleashed.products.forEach(prod => {
-                const stockArr = prod.StockOnHand || [];
-                console.group(`${prod.ProductCode} – ${prod.ProductDescription || ''}`);
-                if (stockArr.length === 0) {
-                    console.log('No stock data');
-                } else {
-                    stockArr.forEach(s => {
-                        const wh = s.WarehouseCode || (s.Warehouse && s.Warehouse.WarehouseCode) || 'Unknown';
-                        const qty = s.QuantityAvailable ?? s.AvailableQty ?? s.QtyOnHand ?? 0;
-                        console.log(`${wh}: ${qty}`);
-                    });
-                }
+            console.group('%c📦 Stock On Hand by Product & Location', 'color: #FF5722; font-weight: bold');
+            unleashed.products.forEach((product, idx) => {
+                const stock = product.StockOnHand || [];
+                if (stock.length === 0) return; // skip if no stock rows
+
+                console.groupCollapsed(`%c${idx + 1}. ${product.ProductCode} - ${product.ProductDescription}`, 'color: #03A9F4');
+                stock.forEach(row => {
+                    const warehouseCode = row.WarehouseCode || (row.Warehouse && row.Warehouse.WarehouseCode) || 'Unknown';
+                    const qty = row.QuantityAvailable ?? row.AvailableQty ?? row.QuantityOnHand ?? row.QtyOnHand ?? 0;
+                    console.log(`${warehouseCode}: ${qty}`);
+                });
                 console.groupEnd();
             });
             console.groupEnd();
         }
+
         console.groupEnd();
     }
 

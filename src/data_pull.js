@@ -84,6 +84,46 @@ async function fetchStockOnHand(productCode, authData) {
   }
 }
 
+// Fetch ALL stock on hand records in bulk (paginated)
+async function fetchAllStockOnHand(authData) {
+  const allStock = [];
+  let currentPage = 1;
+  let hasMorePages = true;
+
+  while (hasMorePages) {
+    const stockUrl = `https://api.unleashedsoftware.com/StockOnHand?pageSize=200&pageNumber=${currentPage}`;
+    console.log(`📦 Fetching StockOnHand page ${currentPage}...`);
+
+    const response = await fetch(stockUrl, {
+      method: 'GET',
+      headers: await createUnleashedHeaders(stockUrl, authData.apiKey, authData.apiId)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch StockOnHand page ${currentPage}: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const items = data.Items || [];
+    allStock.push(...items);
+
+    if (data.Pagination) {
+      const totalPages = data.Pagination.NumberOfPages || 1;
+      hasMorePages = currentPage < totalPages;
+    } else {
+      hasMorePages = false;
+    }
+
+    currentPage++;
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  console.log(`✅ Retrieved ${allStock.length} StockOnHand rows in bulk`);
+  return allStock;
+}
+
 // Note: Product attachments endpoint is not available in the Unleashed API
 // The /Products/{productCode}/Attachments endpoint returns 404 errors
 // This functionality is disabled until a valid endpoint is found
@@ -141,25 +181,10 @@ async function fetchUnleashedData(authData) {
       }
     }
     
-    // For each product, fetch stock on hand and attachments
-    console.log(`\n📦 Fetching additional data for ${products.length} products...`);
-    for (const product of products) {
-      try {
-        // Fetch stock on hand
-        console.log(`   🏢 Fetching stock for ${product.ProductCode}...`);
-        const stockData = await fetchStockOnHand(product.ProductCode, authData);
-        product.StockOnHand = stockData;
-        
-        // Note: Product attachments endpoint not available in Unleashed API
-        // Keeping empty array for compatibility
-        product.Attachments = [];
-      } catch (error) {
-        console.warn(`⚠️ Error fetching additional data for ${product.ProductCode}:`, error.message);
-      }
-      
-      // Add small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    // Attachments placeholder (stock fetched in bulk later)
+    products.forEach(product => {
+      product.Attachments = [];
+    });
     
     allProducts.push(...products);
     
@@ -180,6 +205,27 @@ async function fetchUnleashedData(authData) {
   }
   
   console.log(`✅ Retrieved ${allProducts.length} total products with AttributeSet data`);
+
+  // Fetch all stock on hand in bulk and attach to products
+  console.log(`\n📊 Fetching bulk Stock On Hand data for all products...`);
+  try {
+    const bulkStock = await fetchAllStockOnHand(authData);
+    const stockMap = {};
+    bulkStock.forEach(item => {
+      const prodCode = item.ProductCode || item.Product?.ProductCode;
+      if (!prodCode) return;
+      if (!stockMap[prodCode]) stockMap[prodCode] = [];
+      stockMap[prodCode].push(item);
+    });
+
+    allProducts.forEach(product => {
+      product.StockOnHand = stockMap[product.ProductCode] || [];
+    });
+  } catch (error) {
+    console.error('⚠️ Failed bulk StockOnHand fetch:', error);
+    // Fallback: products keep empty StockOnHand
+  }
+
   results.products = allProducts;
 
   // Customers (company entities)

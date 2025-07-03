@@ -202,7 +202,7 @@ function groupUnleashedProducts(products) {
   return Array.from(groups.values());
 }
 
-async function mapProducts(unleashedProducts, shopifyProducts) {
+async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = []) {
   const results = {
     toCreate: [],
     toUpdate: [],
@@ -303,6 +303,20 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
                 const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
                 if (!warehouseCode) return; // skip if no code
 
+                // Attempt to find matching Shopify location by custom.warehouse_code metafield
+                const matchingLocation = shopifyLocations.find(loc => {
+                  return (
+                    loc?.metafields?.["custom.warehouse_code"] &&
+                    loc.metafields["custom.warehouse_code"] === warehouseCode
+                  );
+                });
+
+                if (!matchingLocation) {
+                  // Skip inventory for unknown warehouse code to prevent errors
+                  console.warn(`⚠️ No Shopify location with warehouse_code "${warehouseCode}" – skipping inventory quantity for ${product.ProductCode}`);
+                  return;
+                }
+
                 // Prefer QuantityAvailable, then fallbacks
                 const qty = parseInt(
                   stock.QuantityAvailable ??
@@ -313,7 +327,7 @@ async function mapProducts(unleashedProducts, shopifyProducts) {
                 );
 
                 inventoryQuantities.push({
-                  locationId: `gid://shopify/Location/${warehouseCode}`,
+                  locationId: matchingLocation.id,
                   name: "available",
                   quantity: isNaN(qty) ? 0 : qty
                 });

@@ -368,7 +368,7 @@ async function handleDataFetch(request, env) {
     try {
       // Map products
       console.log('Mapping products...');
-      mappingResults.products = await mapProducts(data.unleashed.products, data.shopify.products);
+      mappingResults.products = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
       console.log('Product mapping complete:', {
         toCreate: mappingResults.products.toCreate.length,
         toUpdate: mappingResults.products.toUpdate.length,

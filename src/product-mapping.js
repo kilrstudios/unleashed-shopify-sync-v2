@@ -242,6 +242,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
           [];
 
         // Prepare product data
+        console.log(`🔥 CREATING PRODUCT DATA for "${productTitle}"`);
         const productData = {
           handle,
           title: productTitle,

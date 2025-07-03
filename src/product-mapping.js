@@ -286,6 +286,14 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
           variants: group.map(product => {
             const variantOptions = extractVariantOptions(product.AttributeSet);
             
+            // DEBUG: Verify StockOnHand data attachment
+            console.log(`🔍 VARIANT DEBUG for ${product.ProductCode}:`);
+            console.log(`   Product has StockOnHand:`, !!product.StockOnHand);
+            console.log(`   StockOnHand length:`, product.StockOnHand?.length || 0);
+            console.log(`   Is sellable:`, product.IsSellable);
+            console.log(`   Never diminishing:`, product.NeverDiminishing);
+            console.log(`   Will track inventory:`, (!product.NeverDiminishing && product.IsSellable));
+            
             // Calculate inventory quantities for each location
             const inventoryQuantities = [];
             console.log(`   📦 Processing inventory for variant ${product.ProductCode}:`);

@@ -30,14 +30,18 @@ async function updateProductImage(shopifyClient, productId, imageUrl, altText) {
     }
 
     const mutation = `
-      mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
-        productAppendImages(productId: $productId, images: $images) {
-          newImages {
-            id
-            url
-            altText
+      mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+        productCreateMedia(productId: $productId, media: $media) {
+          media {
+            ... on MediaImage {
+              id
+              image {
+                url
+                altText
+              }
+            }
           }
-          userErrors {
+          mediaUserErrors {
             field
             message
           }
@@ -47,15 +51,15 @@ async function updateProductImage(shopifyClient, productId, imageUrl, altText) {
 
     const variables = {
       productId,
-      images: [{
-        src: imageUrl,
-        altText: altText || ''
+      media: [{
+        originalSource: imageUrl,
+        alt: altText || ''
       }]
     };
 
-    console.log(`Creating appending product image: ${imageUrl}`);
+    console.log(`Uploading product image via productCreateMedia: ${imageUrl}`);
     const response = await shopifyClient.request(mutation, variables);
-    return response.productAppendImages;
+    return response.productCreateMedia;
   } catch (error) {
     console.error('Error updating product image:', error);
     throw error;
@@ -116,19 +120,19 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
               img.alt
             );
 
-            if (response.userErrors?.length > 0) {
-              console.error(`❌ Failed to update image:`, response.userErrors);
+            if (response.mediaUserErrors?.length > 0) {
+              console.error(`❌ Failed to update image:`, response.mediaUserErrors);
               results.images.failed.push({
                 productCode: unleashedProduct.ProductCode,
                 imageUrl: img.url,
-                errors: response.userErrors
+                errors: response.mediaUserErrors
               });
             } else {
               console.log(`✅ Successfully updated image`);
               results.images.successful.push({
                 productCode: unleashedProduct.ProductCode,
                 imageUrl: img.url,
-                imageId: response.newImages[0].id
+                imageId: response.media[0].id
               });
             }
           } catch (error) {

@@ -823,6 +823,7 @@ async function mutateProductsDirect(shopifyAuth, mappingResults) {
   
   const { accessToken, shopDomain } = shopifyAuth;
   const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+  console.log(`🔗 Using Shopify API base URL: ${baseUrl}`);
   const headers = {
     'Content-Type': 'application/json',
     'X-Shopify-Access-Token': accessToken
@@ -1578,7 +1579,8 @@ async function executeComprehensiveProductSet(baseUrl, headers, productData, sho
 
 // New comprehensive mutation function that handles everything at once
 async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyLocations) {
-  const baseUrl = `https://${shopifyAuth.shop}.myshopify.com/admin/api/2023-10`;
+  const baseUrl = `https://${shopifyAuth.shopDomain}/admin/api/2025-04`;
+  console.log(`🔗 Using Shopify API base URL: ${baseUrl}`);
   const headers = {
     'Content-Type': 'application/json',
     'X-Shopify-Access-Token': shopifyAuth.accessToken

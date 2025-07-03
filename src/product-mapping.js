@@ -373,15 +373,20 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
               option1: variantOptions.option1,
               option2: variantOptions.option2,
               option3: variantOptions.option3,
-              metafields: Array.from({ length: 10 }, (_, i) => ({
-                namespace: 'custom',
-                key: `price_tier_${i + 1}`,
-                value: JSON.stringify({
-                  amount: product[`SellPriceTier${i + 1}`]?.Value || '0',
-                  currency_code: "AUD"
-                }),
-                type: 'money'
-              }))
+              // Build up to 10 price-tier metafields.
+              // Shopify expects a plain numeric string for `money` type, so we pass the amount only.
+              // Any tier that is blank, non-numeric or zero is skipped entirely.
+              metafields: Array.from({ length: 10 }, (_, i) => {
+                const rawVal = product[`SellPriceTier${i + 1}`]?.Value;
+                const num = rawVal === undefined || rawVal === null ? NaN : parseFloat(rawVal);
+                if (isNaN(num) || num === 0) return null; // skip empty tiers
+                return {
+                  namespace: 'custom',
+                  key: `price_tier_${i + 1}`,
+                  value: String(num),
+                  type: 'money'
+                };
+              }).filter(Boolean)
             };
           })
         };

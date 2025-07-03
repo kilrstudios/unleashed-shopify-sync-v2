@@ -411,6 +411,26 @@
         } else {
             console.log('⚠️ Shopify data not present in response');
         }
+
+        // Extra: log stock on hand per product/location for debugging
+        if (unleashed && Array.isArray(unleashed.products)) {
+            console.group('%c📦 Stock on Hand per Product', 'color: #FFC107; font-weight:bold');
+            unleashed.products.forEach(prod => {
+                const stockArr = prod.StockOnHand || [];
+                console.group(`${prod.ProductCode} – ${prod.ProductDescription || ''}`);
+                if (stockArr.length === 0) {
+                    console.log('No stock data');
+                } else {
+                    stockArr.forEach(s => {
+                        const wh = s.WarehouseCode || (s.Warehouse && s.Warehouse.WarehouseCode) || 'Unknown';
+                        const qty = s.QuantityAvailable ?? s.AvailableQty ?? s.QtyOnHand ?? 0;
+                        console.log(`${wh}: ${qty}`);
+                    });
+                }
+                console.groupEnd();
+            });
+            console.groupEnd();
+        }
         console.groupEnd();
     }
 

@@ -84,31 +84,50 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
         continue;
       }
 
-      // Process images if product has attachments
+      // Collect image sources from Images, ImageUrl, and Attachments
+      const imageSources = [];
+      if (unleashedProduct.Images && unleashedProduct.Images.length > 0) {
+        imageSources.push(...unleashedProduct.Images.map(img => ({
+          url: img.Url,
+          alt: unleashedProduct.ProductDescription
+        })));
+      }
+      if (unleashedProduct.ImageUrl) {
+        imageSources.push({
+          url: unleashedProduct.ImageUrl,
+          alt: unleashedProduct.ProductDescription
+        });
+      }
       if (unleashedProduct.Attachments && unleashedProduct.Attachments.length > 0) {
+        imageSources.push(...unleashedProduct.Attachments.map(att => ({
+          url: att.DownloadUrl || att.Url,
+          alt: att.Description || unleashedProduct.ProductDescription
+        })));
+      }
+
+      if (imageSources.length > 0) {
         console.log(`\n🖼️ Processing images for product ${unleashedProduct.ProductCode}...`);
-        
-        for (const attachment of unleashedProduct.Attachments) {
+        for (const img of imageSources) {
           try {
             const response = await updateProductImage(
               shopifyClient,
               shopifyProduct.id,
-              attachment.Url,
-              attachment.Description || unleashedProduct.ProductDescription
+              img.url,
+              img.alt
             );
 
             if (response.userErrors?.length > 0) {
               console.error(`❌ Failed to update image:`, response.userErrors);
               results.images.failed.push({
                 productCode: unleashedProduct.ProductCode,
-                imageUrl: attachment.Url,
+                imageUrl: img.url,
                 errors: response.userErrors
               });
             } else {
               console.log(`✅ Successfully updated image`);
               results.images.successful.push({
                 productCode: unleashedProduct.ProductCode,
-                imageUrl: attachment.Url,
+                imageUrl: img.url,
                 imageId: response.image.id
               });
             }
@@ -116,7 +135,7 @@ async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopif
             console.error(`❌ Error updating image for ${unleashedProduct.ProductCode}:`, error);
             results.images.failed.push({
               productCode: unleashedProduct.ProductCode,
-              imageUrl: attachment.Url,
+              imageUrl: img.url,
               error: error.message
             });
           }

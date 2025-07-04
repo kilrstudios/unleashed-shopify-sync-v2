@@ -2,6 +2,7 @@ import { pullAllData } from './data_pull.js';
 import { mapProducts } from './product-mapping.js';
 import { mutateProducts } from './product-mutations.js';
 import { handlePostSyncOperations } from './post-sync-handler';
+import { getDefaultWarehouseCode } from './helpers.js';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -95,7 +96,13 @@ export async function handleProductMutations(request, env) {
 
     // Perform product mapping
     console.log('🗺️ Starting product mapping for mutations...');
-    const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
+    const defaultWarehouseCode = getDefaultWarehouseCode(data.unleashed.warehouses);
+    const productMappingResults = await mapProducts(
+      data.unleashed.products,
+      data.shopify.products,
+      data.shopify.locations,
+      defaultWarehouseCode
+    );
     
     // Execute product mutations
     console.log('🔄 Starting product mutations...');
@@ -154,7 +161,8 @@ export async function handleProductSync(request, env) {
 
     // Map products
     console.log(`🗺️ Step 4a: Mapping products...`);
-    const mappingResults = await mapProducts(unleashedProducts, shopifyProducts, shopifyLocations);
+    const defaultWarehouseCode = null; // Not available in this context; rely on fallback logic
+    const mappingResults = await mapProducts(unleashedProducts, shopifyProducts, shopifyLocations, defaultWarehouseCode);
 
     // Execute mutations
     console.log(`🔄 Step 4b: Executing product mutations...`);
@@ -269,7 +277,6 @@ async function executeProductMutations(shopifyClient, mappingResults) {
           results.errors++;
         }
       }
-      console.log(`✅ Product archival completed: ${results.archived} successful, ${results.errors} failed`);
     }
 
     console.log(`✅ === DIRECT PRODUCT MUTATIONS COMPLETE ===`);

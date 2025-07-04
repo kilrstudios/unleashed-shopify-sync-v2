@@ -73,19 +73,41 @@ function compareProductData(unleashedProductData, shopifyProduct) {
       differences.push(`variant ${sku} tracking: ${shopifyTracked} → ${unleashedTracked}`);
     }
 
-    // Inventory comparison – if the variant is tracked we always treat inventory data
-    // as a change candidate so the product will be marked for UPDATE and the productSet
-    // mutation can carry absolute quantities to Shopify.
+    // ---- Inventory comparison by location ----
     if (unleashedVariant.inventory_management === 'shopify') {
-      // Mark that we intend to sync inventory and record a pseudo-diff so hasChanges === true
-      needsPostSync.inventory = true;
-      differences.push(`variant ${sku} inventory quantities will be refreshed`);
+      const unleashedInv = new Map();
+      (unleashedVariant.inventory_levels || unleashedVariant.inventoryQuantities || []).forEach(lvl => {
+        const locId = String(lvl.locationId || lvl.location_id || '');
+        if (!locId) return;
+        const qty = parseInt(lvl.quantity ?? lvl.available ?? 0, 10);
+        unleashedInv.set(locId, isNaN(qty) ? 0 : qty);
+      });
+
+      const shopifyInv = new Map();
+      const invNodes = shopifyVariant.inventoryItem?.inventoryLevels?.nodes || [];
+      invNodes.forEach(node => {
+        const locId = String(node.location?.id || '');
+        if (!locId) return;
+        const qty = parseInt(node.quantities?.[0]?.quantity ?? 0, 10);
+        shopifyInv.set(locId, isNaN(qty) ? 0 : qty);
+      });
+
+      const allLocIds = new Set([...unleashedInv.keys(), ...shopifyInv.keys()]);
+      let inventoryDiffFound = false;
+      allLocIds.forEach(locId => {
+        const uQty = unleashedInv.get(locId) ?? 0;
+        const sQty = shopifyInv.get(locId) ?? 0;
+        if (uQty !== sQty) {
+          inventoryDiffFound = true;
+          differences.push(`variant ${sku} inventory (${locId}): ${sQty} → ${uQty}`);
+        }
+      });
+
+      if (inventoryDiffFound) {
+        // Flag that we need to sync inventory via productSet update or post-sync operation.
+        needsPostSync.inventory = true;
+      }
     }
-  }
-  
-  // Check if image sync is needed (but don't include in differences)
-  if (unleashedProductData.Attachments && unleashedProductData.Attachments.length > 0) {
-    needsPostSync.images = true;
   }
   
   // Check for removed variants in Shopify that don't exist in Unleashed
@@ -93,6 +115,50 @@ function compareProductData(unleashedProductData, shopifyProduct) {
     if (!unleashedVariants.has(sku)) {
       differences.push(`variant: Shopify variant "${sku}" no longer exists in Unleashed`);
     }
+  }
+  
+  // ---- Image comparison (after variants loop) ----
+  const baseKey = (url) => {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      return u.pathname.split('/').pop().split('?')[0].toLowerCase();
+    } catch {
+      return url.split('/').pop().split('?')[0].toLowerCase();
+    }
+  };
+
+  const unleashedImageKeys = new Set(
+    (unleashedProductData.images || [])
+      .map(img => baseKey(img.src))
+      .filter(Boolean)
+  );
+
+  const shopifyImageKeys = new Set();
+  // Variant-level images (available from data_pull)
+  shopifyProduct.variants.forEach(v => {
+    if (v.image && v.image.url) {
+      shopifyImageKeys.add(baseKey(v.image.url));
+    }
+  });
+  // Featured image if present
+  if (shopifyProduct.featuredImage && shopifyProduct.featuredImage.url) {
+    shopifyImageKeys.add(baseKey(shopifyProduct.featuredImage.url));
+  }
+
+  let imagesDifferent = false;
+  // Any images present in Unleashed but missing in Shopify?
+  unleashedImageKeys.forEach(key => {
+    if (!shopifyImageKeys.has(key)) imagesDifferent = true;
+  });
+  // Any extra images in Shopify that are not in Unleashed?
+  shopifyImageKeys.forEach(key => {
+    if (!unleashedImageKeys.has(key)) imagesDifferent = true;
+  });
+
+  if (imagesDifferent) {
+    needsPostSync.images = true;
+    differences.push(`product images differ`);
   }
   
   return {
@@ -206,7 +272,8 @@ function groupUnleashedProducts(products) {
   return Array.from(groups.values());
 }
 
-async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = []) {
+// defaultWarehouseCode: string | null – the tenant-wide default warehouse code
+async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = [], defaultWarehouseCode = null) {
   const results = {
     toCreate: [],
     toUpdate: [],
@@ -304,21 +371,36 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             const inventoryQuantities = [];
             if (product.StockOnHand && product.StockOnHand.length > 0) {
               product.StockOnHand.forEach(stock => {
-                const warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
-                if (!warehouseCode) return; // skip if no code
+                // Prefer explicit warehouse code, otherwise fall back to the tenant-wide default
+                let warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
+                if (!warehouseCode || warehouseCode.trim() === '') {
+                  warehouseCode = defaultWarehouseCode;
+                  if (!warehouseCode) {
+                    console.warn(`⚠️ Stock row for ${product.ProductCode} has no warehouse; default not supplied – skipping`);
+                    return;
+                  }
+                  console.log(`   ↪️  Falling back to default warehouse "${warehouseCode}"`);
+                }
 
-                // Attempt to find matching Shopify location by custom.warehouse_code metafield
-                const matchingLocation = shopifyLocations.find(loc => {
+                // DEBUG: log raw stock row before location match
+                console.log(
+                  'INV MAP raw →',
+                  product.ProductCode,
+                  '| WH:', warehouseCode,
+                  '| Avail:', stock.QuantityAvailable ?? stock.QtyAvailable ?? stock.AvailableQty,
+                  '| OnHand:', stock.QuantityOnHand ?? stock.QtyOnHand
+                );
+
+                let matchingLocation = shopifyLocations.find(loc => {
                   return (
                     loc?.metafields?.["custom.warehouse_code"] &&
                     loc.metafields["custom.warehouse_code"] === warehouseCode
                   );
                 });
 
-                if (!matchingLocation) {
-                  // Skip inventory for unknown warehouse code to prevent errors
-                  console.warn(`⚠️ No Shopify location with warehouse_code "${warehouseCode}" – skipping inventory quantity for ${product.ProductCode}`);
-                  return;
+                if (!matchingLocation && shopifyLocations.length > 0) {
+                  console.warn(`⚠️ No Shopify location for warehouse_code "${warehouseCode}" – using primary location ${shopifyLocations[0].name}`);
+                  matchingLocation = shopifyLocations[0];
                 }
 
                 // Determine available quantity, supporting multiple possible field names from Unleashed
@@ -381,10 +463,10 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                 const num = rawVal === undefined || rawVal === null ? NaN : parseFloat(rawVal);
                 if (isNaN(num) || num === 0) return null; // skip empty tiers
                 return {
-                  namespace: 'custom',
-                  key: `price_tier_${i + 1}`,
+                namespace: 'custom',
+                key: `price_tier_${i + 1}`,
                   value: String(num),
-                  type: 'money'
+                type: 'money'
                 };
               }).filter(Boolean)
             };

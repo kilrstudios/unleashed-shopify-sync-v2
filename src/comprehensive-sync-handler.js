@@ -4,6 +4,7 @@
  */
 
 import { pullAllData } from './data_pull.js';
+import { getDefaultWarehouseCode } from './helpers.js';
 import { mapLocations } from './location-mapping.js';
 import { mapCustomers } from './customer-mapping.js';
 import { mapProducts } from './product-mapping.js';
@@ -253,7 +254,13 @@ export async function handleComprehensiveSync(request, env) {
       try {
         // Map products
         console.log('🗺️ Step 4a: Mapping products...');
-        const productMappingResults = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
+        const defaultWarehouseCode = getDefaultWarehouseCode(data.unleashed.warehouses);
+        const productMappingResults = await mapProducts(
+          data.unleashed.products,
+          data.shopify.products,
+          data.shopify.locations,
+          defaultWarehouseCode
+        );
         
         // Execute product mutations (using comprehensive productSet approach)
         console.log('🔄 Step 4b: Executing product mutations...');

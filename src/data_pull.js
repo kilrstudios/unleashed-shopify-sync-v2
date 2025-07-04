@@ -121,6 +121,22 @@ async function fetchAllStockOnHand(authData) {
   }
 
   console.log(`✅ Retrieved ${allStock.length} StockOnHand rows in bulk`);
+
+  // DEBUG: print each row so we can verify warehouse codes and quantities
+  allStock.forEach(item => {
+    const prodCode = item.ProductCode || item.Product?.ProductCode || 'UNKNOWN_CODE';
+    const whCode = item.WarehouseCode || item.Warehouse?.WarehouseCode || 'UNKNOWN_WH';
+    const avail = item.QuantityAvailable ?? item.QtyAvailable ?? item.AvailableQty ?? 'n/a';
+    const onHand = item.QuantityOnHand ?? item.QtyOnHand ?? 'n/a';
+    console.log(`STOCK-ROW ${prodCode} | WH: ${whCode} | Avail: ${avail} | OnHand: ${onHand}`);
+
+    // If we still can't see a warehouse code, dump the raw JSON so we can
+    // discover where Unleashed puts this information.
+    if (whCode === 'UNKNOWN_WH') {
+      console.log('RAW STOCK JSON', JSON.stringify(item));
+    }
+  });
+
   return allStock;
 }
 
@@ -308,6 +324,7 @@ async function fetchShopifyProducts(baseUrl, headers) {
                           quantity
                         }
                         location {
+                          id
                           name
                         }
                       }

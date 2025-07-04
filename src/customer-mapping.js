@@ -190,20 +190,24 @@ async function mapCustomers(unleashedContacts, unleashedCustomers, shopifyCustom
 function compareCustomerData(unleashedData, shopifyCustomer) {
   const differences = [];
   
-  // Compare basic customer fields
-  if (unleashedData.firstName !== shopifyCustomer.firstName) {
+  const norm = v => (v === null || v === undefined) ? '' : String(v).trim();
+
+  // Compare basic customer fields (case-insensitive where relevant)
+  if (norm(unleashedData.firstName).toLowerCase() !== norm(shopifyCustomer.firstName).toLowerCase()) {
     differences.push(`firstName: "${shopifyCustomer.firstName}" → "${unleashedData.firstName}"`);
   }
   
-  if (unleashedData.lastName !== shopifyCustomer.lastName) {
+  if (norm(unleashedData.lastName).toLowerCase() !== norm(shopifyCustomer.lastName).toLowerCase()) {
     differences.push(`lastName: "${shopifyCustomer.lastName}" → "${unleashedData.lastName}"`);
   }
   
-  if (unleashedData.email.toLowerCase() !== shopifyCustomer.email.toLowerCase()) {
+  if (norm(unleashedData.email).toLowerCase() !== norm(shopifyCustomer.email).toLowerCase()) {
     differences.push(`email: "${shopifyCustomer.email}" → "${unleashedData.email}"`);
   }
   
-  if (unleashedData.phone !== shopifyCustomer.phone) {
+  // Phone numbers – strip non-digits before comparing
+  const digits = p => norm(p).replace(/[^0-9]/g, '');
+  if (digits(unleashedData.phone) !== digits(shopifyCustomer.phone)) {
     differences.push(`phone: "${shopifyCustomer.phone}" → "${unleashedData.phone}"`);
   }
   
@@ -211,8 +215,8 @@ function compareCustomerData(unleashedData, shopifyCustomer) {
   const shopifyMetafields = shopifyCustomer.metafields || {};
   for (const metafield of unleashedData.metafields) {
     const currentValue = shopifyMetafields[`${metafield.namespace}.${metafield.key}`];
-    // Only add to differences if the metafield exists and is different, or doesn't exist at all
-    if (currentValue !== metafield.value && (currentValue !== undefined || metafield.value !== undefined)) {
+    const normVal = v => (v === null || v === undefined) ? '' : String(v).trim();
+    if (normVal(currentValue) !== normVal(metafield.value)) {
       differences.push(`${metafield.namespace}.${metafield.key}: "${currentValue}" → "${metafield.value}"`);
     }
   }

@@ -505,7 +505,7 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
             name: "available",
             reason: "correction",
             onHandQuantities: [{
-              locationId: update.locationId,
+            locationId: update.locationId,
               inventoryItemId: update.inventoryItemId,
               availableQuantity: update.availableQuantity
             }]
@@ -519,7 +519,7 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
         });
 
         const data = await response.json();
-
+        
         const userErrs = data.data.inventorySetQuantities.userErrors;
         if (userErrs && userErrs.length > 0) {
           console.warn(`⚠️ Inventory userErrors for ${update.inventoryItemId}:`, JSON.stringify(userErrs));
@@ -544,7 +544,7 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
     });
 
     await Promise.all(batchPromises);
-
+    
     if (i + batchSize < inventoryUpdates.length) {
       await new Promise(res => setTimeout(res, 500));
     }
@@ -1056,7 +1056,7 @@ async function handleInventoryUpdate(request, env) {
                 name: "available",
                 reason: "correction",
                 onHandQuantities: [{
-                  locationId: update.locationId,
+                locationId: update.locationId,
                   inventoryItemId: update.inventoryItemId,
                   availableQuantity: update.availableQuantity
                 }]
@@ -1129,7 +1129,7 @@ async function handleImageUpdate(request, env) {
       const stemBase = stem.split('_')[0]; // strip Shopify size suffix
       return `${stemBase}.${ext}`;
     };
-
+    
     for (const imageData of images) {
       try {
         const mutation = `
@@ -1517,6 +1517,9 @@ async function executeComprehensiveProductSet(baseUrl, headers, productData, sho
                 id
                 sku
                 title
+                image {
+                  id
+                }
                 inventoryItem {
                   id
                 }
@@ -1560,10 +1563,10 @@ async function executeComprehensiveProductSet(baseUrl, headers, productData, sho
 
   const productSetResult = result.data.productSet;
 
-  // Handle variant images after product creation/update
+  // Handle variant images after product creation/update, ensuring no duplicate uploads or links
   let imageResult = null;
   if (productData.images && productData.images.length > 0) {
-    console.log(`🖼️ Processing images for product: ${productData.title}`);
+    console.log(`🖼️ Processing ${productData.images.length} images for product: ${productSetResult.product.title}`);
     imageResult = await handleVariantImages(baseUrl, headers, productSetResult, productData);
   }
 
@@ -1581,6 +1584,9 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
     'Content-Type': 'application/json',
     'X-Shopify-Access-Token': shopifyAuth.accessToken
   };
+
+  // If true we perform a second inventorySetQuantities call after productSet; normally unnecessary
+  const enableSeparateInventoryPush = false;
 
   const results = {
     method: 'comprehensive',
@@ -1645,9 +1651,9 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
         }
       }
       
-      // --- Push inventory levels ---
-      const inventoryUpdates = buildInventoryUpdates(result.product, product);
-      if (inventoryUpdates.length > 0) {
+      // --- Push inventory levels (optional) ---
+      const inventoryUpdates = enableSeparateInventoryPush ? buildInventoryUpdates(result.product, product) : [];
+      if (enableSeparateInventoryPush && inventoryUpdates.length > 0) {
         const invRes = await updateInventoryLevels(baseUrl, headers, inventoryUpdates);
         results.inventory.successful.push(...invRes.successful);
         results.inventory.failed.push(...invRes.failed);
@@ -1700,9 +1706,9 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
         }
       }
       
-      // --- Push inventory levels ---
-      const inventoryUpdates = buildInventoryUpdates(result.product, product);
-      if (inventoryUpdates.length > 0) {
+      // --- Push inventory levels (optional) ---
+      const inventoryUpdates = enableSeparateInventoryPush ? buildInventoryUpdates(result.product, product) : [];
+      if (enableSeparateInventoryPush && inventoryUpdates.length > 0) {
         const invRes = await updateInventoryLevels(baseUrl, headers, inventoryUpdates);
         results.inventory.successful.push(...invRes.successful);
         results.inventory.failed.push(...invRes.failed);
@@ -1747,7 +1753,7 @@ async function mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyL
   return results;
 }
 
-// Handle variant images after product creation/update
+// Handle variant images after product creation/update, ensuring no duplicate uploads or links
 async function handleVariantImages(baseUrl, headers, productResult, productData) {
   if (!productData.images || productData.images.length === 0) {
     return { success: true, message: 'No images to process' };
@@ -1756,81 +1762,160 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
   console.log(`🖼️ Processing ${productData.images.length} images for product: ${productResult.product.title}`);
 
   try {
-    // Step 1: Get current product images
+    // ---------------------------------------------
+    // 1. Fetch existing images + build helper maps
+    // ---------------------------------------------
     const existingImages = await getProductImages(baseUrl, headers, productResult.product.id);
-    
-    // Step 2: Determine which images need to be uploaded
+
+    // ------------------------------------------------------
+    // Build variant → image mapping using variant.image.id
+    // (variantIds field on Image was removed from the 2024-10 API).
+    // ------------------------------------------------------
+    const variantImageMap = new Map(); // variantId → Set(imageIds)
+
+    // From variant.image.id (preferred – always available in current API)
+    productResult.product.variants.edges.forEach(edge => {
+      const vId = edge.node.id;
+      const imgId = edge.node.image?.id;
+      if (imgId) {
+        if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+        variantImageMap.get(vId).add(imgId);
+      }
+    });
+
+    // Also include legacy mapping if variantIds still present in the image nodes
+    existingImages.forEach(img => {
+      (img.variantIds || []).forEach(vId => {
+        if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+        variantImageMap.get(vId).add(img.id);
+      });
+    });
+
+    // Helper to create a stable key for an image URL (strip CDN params & size suffixes)
+    const baseKey = (fullPath) => {
+      const file = fullPath.split('/').pop().split('?')[0]; // filename.ext
+      const parts = file.split('.');
+      const ext = parts.pop();
+      const stem = parts.join('.');
+      const stemBase = stem.split('_')[0]; // strip Shopify size suffix
+      return `${stemBase}.${ext}`;
+    };
+
+    // Map of baseKey → imageId for images already on the product
+    const existingByKey = new Map(existingImages.map(img => [baseKey(img.originalSrc), img]));
+
+    // Ensure we only treat each canonical image once even if productData lists it multiple times
+    const canonicalSeen = new Set();
+
+    // ------------------------------------------------------
+    // 2. Decide which images need uploading / variant linking
+    // ------------------------------------------------------
     const imagesToUpload = [];
-    const imageVariantMappings = [];
+    const imageVariantMappings = []; // {imageId, variantSkus[]}
 
     for (const imageData of productData.images) {
-      // Helper to reduce a filename like "foo_1024x.jpg" or CDN variants to its
-      // base key "foo.jpg" for reliable matching.
-      const baseKey = (fullPath) => {
-        const file = fullPath.split('/').pop().split('?')[0]; // filename.ext
-        const parts = file.split('.');
-        const ext = parts.pop();
-        const stem = parts.join('.');
-        const stemBase = stem.split('_')[0]; // strip Shopify size suffix
-        return `${stemBase}.${ext}`;
-      };
-
-      const incomingKey = baseKey(imageData.src);
-
-      const existingImage = existingImages.find(img => baseKey(img.originalSrc) === incomingKey);
-      
-      if (existingImage) {
-        console.log(`✅ Image already exists: ${imageData.src}`);
-        // Image exists, just need to link to variants
-        if (imageData.variantSkus && imageData.variantSkus.length > 0) {
-          imageVariantMappings.push({
-            imageId: existingImage.id,
-            variantSkus: imageData.variantSkus,
-            src: imageData.src
-          });
+      const key = baseKey(imageData.src);
+      if (canonicalSeen.has(key)) {
+        // We already processed this image URL, just merge its variant SKUs later
+        continue;
+      }
+      canonicalSeen.add(key);
+      const maybeExisting = existingByKey.get(key);
+      if (maybeExisting) {
+        // Already on product – just ensure variant linkage later
+        if (imageData.variantSkus && imageData.variantSkus.length) {
+          imageVariantMappings.push({ imageId: maybeExisting.id, variantSkus: imageData.variantSkus, src: imageData.src });
         }
       } else {
-        console.log(`📤 Need to upload new image: ${imageData.src}`);
         imagesToUpload.push(imageData);
       }
     }
 
-    // Step 3: Upload new images if needed
+    // ---------------------------------------------
+    // 3. Upload missing images (once per unique URL)
+    // ---------------------------------------------
     let uploadedImages = [];
-    if (imagesToUpload.length > 0) {
+    if (imagesToUpload.length) {
       uploadedImages = await uploadProductImages(baseUrl, headers, productResult.product.id, imagesToUpload);
+      // Merge them into existing maps so subsequent logic sees them as present
+      uploadedImages.forEach(uImg => {
+        existingByKey.set(baseKey(uImg.originalSrc), uImg);
+      });
     }
 
-    // Step 4: Build complete image-variant mapping list
-    for (const uploadedImage of uploadedImages) {
-      const originalImageData = imagesToUpload.find(img => img.src === uploadedImage.originalSrc);
-      if (originalImageData && originalImageData.variantSkus && originalImageData.variantSkus.length > 0) {
-        imageVariantMappings.push({
-          imageId: uploadedImage.id,
-          variantSkus: originalImageData.variantSkus,
-          src: uploadedImage.originalSrc
-        });
+    // Add variant mappings for uploaded images
+    for (const uImg of uploadedImages) {
+      const original = imagesToUpload.find(i => i.src === uImg.originalSrc);
+      if (original?.variantSkus?.length) {
+        imageVariantMappings.push({ imageId: uImg.id, variantSkus: original.variantSkus, src: uImg.originalSrc });
       }
     }
 
-    // Step 5: Link images to variants
-    if (imageVariantMappings.length > 0) {
-      await linkImagesToVariants(baseUrl, headers, productResult.product.id, productResult.product.variants.edges, imageVariantMappings);
+    // ----------------------------------------------
+    // 4. Build final ImageInput list, skipping dupes
+    // ----------------------------------------------
+    // SKU → variantId map
+    const variantIdMap = new Map();
+    productResult.product.variants.edges.forEach(edge => variantIdMap.set(edge.node.sku, edge.node.id));
+
+    const imagesToLink = [];
+
+    const sourceMappings = imageVariantMappings.length > 0 ? imageVariantMappings : [];
+    sourceMappings.forEach(mapping => {
+      const variantIdsFromSku = (mapping.variantSkus || []).map(sku => variantIdMap.get(sku));
+      const variantIds = (mapping.variantIds || []).concat(variantIdsFromSku)
+        .filter(Boolean)
+        .filter(vId => !(variantImageMap.get(vId)?.has(mapping.imageId))); // skip if already linked
+
+      if (variantIds.length) {
+        imagesToLink.push({ id: mapping.imageId, variantIds });
+        variantIds.forEach(vId => {
+          if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+          variantImageMap.get(vId).add(mapping.imageId);
+        });
+      }
+    });
+
+    // ------------------------------------------------
+    // 5. Ensure every variant has at least one image
+    // ------------------------------------------------
+    const defaultImageId = existingImages[0]?.id || uploadedImages[0]?.id || null;
+    if (defaultImageId) {
+      variantIdMap.forEach((vId) => {
+        if (!variantImageMap.has(vId) || variantImageMap.get(vId).size === 0) {
+          // Variant lacks an image – link the default product image
+          imagesToLink.push({ id: defaultImageId, variantIds: [vId] });
+          if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+          variantImageMap.get(vId).add(defaultImageId);
+        }
+      });
+    }
+
+    // Deduplicate imagesToLink pairs (id+variantIds) – merge variantIds per image
+    const mergeMap = new Map();
+    imagesToLink.forEach(({ id, variantIds }) => {
+      if (!mergeMap.has(id)) mergeMap.set(id, new Set());
+      variantIds.forEach(v => mergeMap.get(id).add(v));
+    });
+    const mergedImagesToLink = Array.from(mergeMap.entries()).map(([id, vSet]) => ({ id, variantIds: Array.from(vSet) }));
+
+    // ---------------------------------------------
+    // 6. Run single productAppendImages call to link
+    // ---------------------------------------------
+    if (mergedImagesToLink.length) {
+      await linkImagesToVariants(baseUrl, headers, productResult.product.id, productResult.product.variants.edges, [], mergedImagesToLink);
     }
 
     return {
       success: true,
       uploadedImages: uploadedImages.length,
-      linkedImages: imageVariantMappings.length,
-      message: `Processed ${uploadedImages.length} uploads and ${imageVariantMappings.length} variant links`
+      linkedImages: mergedImagesToLink.reduce((sum, img) => sum + img.variantIds.length, 0),
+      message: `Uploaded ${uploadedImages.length}, linked to ${mergedImagesToLink.length} images/sets`
     };
 
   } catch (error) {
     console.error('❌ Error handling variant images:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
@@ -1844,7 +1929,6 @@ async function getProductImages(baseUrl, headers, productId) {
             node {
               id
               originalSrc
-              variantIds
             }
           }
         }
@@ -1872,114 +1956,119 @@ async function getProductImages(baseUrl, headers, productId) {
 
 // Upload new images to product
 async function uploadProductImages(baseUrl, headers, productId, imagesToUpload) {
-  const mutation = `
-    mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
-      productAppendImages(productId: $productId, images: $images) {
-        images {
-          id
-          originalSrc
-        }
-        userErrors {
-          field
-          message
+  const uploaded = [];
+
+  for (const img of imagesToUpload) {
+    const mutation = `
+      mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+        productCreateMedia(productId: $productId, media: $media) {
+          media {
+            ... on MediaImage {
+              id
+              image {
+                id
+                originalSrc
+              }
+            }
+          }
+          mediaUserErrors {
+            field
+            message
+          }
         }
       }
+    `;
+
+    console.log(`📤 Uploading image ${img.src} ...`);
+
+    const response = await fetch(`${baseUrl}/graphql.json`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: mutation,
+        variables: {
+          productId,
+          media: [{
+            originalSource: img.src,
+            mediaContentType: "IMAGE"
+          }]
+        }
+      })
+    });
+
+    const result = await response.json();
+
+    if (result.errors) {
+      throw new Error(`Failed to upload image: ${JSON.stringify(result.errors)}`);
     }
-  `;
 
-  const images = imagesToUpload.map(img => ({ src: img.src }));
+    const creation = result.data.productCreateMedia;
+    const userErrors = creation.mediaUserErrors;
+    if (userErrors && userErrors.length) {
+      throw new Error(`Image upload errors: ${JSON.stringify(userErrors)}`);
+    }
 
-  console.log(`📤 Uploading ${images.length} images to product...`);
-
-  const response = await fetch(`${baseUrl}/graphql.json`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      query: mutation,
-      variables: {
-        productId,
-        images
-      }
-    })
-  });
-
-  const result = await response.json();
-  
-  if (result.errors) {
-    throw new Error(`Failed to upload images: ${JSON.stringify(result.errors)}`);
+    uploaded.push(creation.media[0].image || { id: creation.media[0].id, originalSrc: img.src });
   }
 
-  if (result.data.productAppendImages.userErrors.length > 0) {
-    throw new Error(`Image upload errors: ${JSON.stringify(result.data.productAppendImages.userErrors)}`);
-  }
-
-  console.log(`✅ Uploaded ${result.data.productAppendImages.images.length} images`);
-  return result.data.productAppendImages.images;
+  console.log(`✅ Uploaded ${uploaded.length} images`);
+  return uploaded;
 }
 
 // Link images to specific variants
-async function linkImagesToVariants(baseUrl, headers, productId, productVariants, imageVariantMappings) {
-  // Convert variant SKUs to variant IDs
+async function linkImagesToVariants(baseUrl, headers, productId, productVariants, legacyMappings = [], preBuiltImages = null) {
+  // Build map sku -> variantId for convenience
   const variantIdMap = new Map();
-  productVariants.forEach(variantEdge => {
-    const variant = variantEdge.node;
-    variantIdMap.set(variant.sku, variant.id);
-  });
+  productVariants.forEach(edge => variantIdMap.set(edge.node.sku, edge.node.id));
 
-  // Build image linking payload
-  const imagesToLink = imageVariantMappings.map(mapping => {
-    const variantIds = mapping.variantSkus
-      .map(sku => variantIdMap.get(sku))
-      .filter(Boolean); // Remove any undefined variant IDs
+  const sourceMappings = preBuiltImages && preBuiltImages.length ? preBuiltImages : legacyMappings;
+  const imagesToLink = sourceMappings.map(m => {
+    let variantIds = Array.isArray(m.variantIds) ? m.variantIds : [];
+    if (variantIds.length === 0 && m.variantSkus) {
+      variantIds = m.variantSkus.map(sku => variantIdMap.get(sku)).filter(Boolean);
+    }
+    return { imageId: m.imageId || m.id, variantIds: variantIds.filter(Boolean) };
+  }).filter(i => i.variantIds.length);
 
-    return {
-      id: mapping.imageId,
-      variantIds
-    };
-  }).filter(img => img.variantIds.length > 0); // Only include images with valid variant IDs
-
-  if (imagesToLink.length === 0) {
-    console.log('⚠️ No valid variant IDs found for image linking');
+  if (!imagesToLink.length) {
+    console.log('⚠️ No images require linking');
     return;
   }
 
-  const mutation = `
-    mutation productAppendImages($productId: ID!, $images: [ImageInput!]!) {
-      productAppendImages(productId: $productId, images: $images) {
-        images {
-          id
-          variantIds
-        }
-        userErrors {
-          field
-          message
+  console.log(`🔗 Linking ${imagesToLink.length} images to variants via mediaUpdate ...`);
+
+  for (const link of imagesToLink) {
+    const mutation = `
+      mutation mediaUpdate($mediaId: ID!, $media: MediaInput!) {
+        mediaUpdate(id: $mediaId, media: $media) {
+          media { id }
+          userErrors { field message }
         }
       }
+    `;
+
+    const response = await fetch(`${baseUrl}/graphql.json`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: mutation,
+        variables: {
+          mediaId: link.imageId,
+          media: { variantIds: link.variantIds }
+        }
+      })
+    });
+
+    const result = await response.json();
+
+    if (result.errors) {
+      throw new Error(`Failed to update image variants: ${JSON.stringify(result.errors)}`);
     }
-  `;
 
-  console.log(`🔗 Linking ${imagesToLink.length} images to variants...`);
-
-  const response = await fetch(`${baseUrl}/graphql.json`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      query: mutation,
-      variables: {
-        productId,
-        images: imagesToLink
-      }
-    })
-  });
-
-  const result = await response.json();
-  
-  if (result.errors) {
-    throw new Error(`Failed to link images to variants: ${JSON.stringify(result.errors)}`);
-  }
-
-  if (result.data.productAppendImages.userErrors.length > 0) {
-    throw new Error(`Image linking errors: ${JSON.stringify(result.data.productAppendImages.userErrors)}`);
+    const userErrors = result.data.mediaUpdate.userErrors;
+    if (userErrors && userErrors.length) {
+      throw new Error(`Image linking errors: ${JSON.stringify(userErrors)}`);
+    }
   }
 
   console.log(`✅ Successfully linked images to variants`);

@@ -12,6 +12,7 @@ import { handleCustomerMutations, handleCustomerSync } from './customer-mutation
 import { handleProductMutations, handleProductSync } from './product-mutation-handler.js';
 import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
 import { handleProductQueueMessage, handleInventoryUpdate, handleImageUpdate } from './product-mutations.js';
+import { getDefaultWarehouseCode } from './helpers.js';
 
 // CORS headers for all responses
 const corsHeaders = {
@@ -368,7 +369,13 @@ async function handleDataFetch(request, env) {
     try {
       // Map products
       console.log('Mapping products...');
-      mappingResults.products = await mapProducts(data.unleashed.products, data.shopify.products, data.shopify.locations);
+      const defaultWarehouseCode = getDefaultWarehouseCode(data.unleashed.warehouses);
+      mappingResults.products = await mapProducts(
+        data.unleashed.products,
+        data.shopify.products,
+        data.shopify.locations,
+        defaultWarehouseCode
+      );
       console.log('Product mapping complete:', {
         toCreate: mappingResults.products.toCreate.length,
         toUpdate: mappingResults.products.toUpdate.length,

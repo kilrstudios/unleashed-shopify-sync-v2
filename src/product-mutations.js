@@ -1902,46 +1902,91 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     // ---------------------------------------------
     // 6. Run single productAppendImages call to link
     // ---------------------------------------------
-    console.log(`🔗 Linking ${imagesToLink.length} images to variants via productVariantAppendMedia ...`);
+    const prodId = productResult.product.id;
 
-    // We can batch all links in one call; Shopify allows multiple inputs
-    const variantMediaInputs = imagesToLink.map(l => ({ variantId: l.variantIds[0], mediaIds: [l.imageId] }));
-    // If image needs to attach to multiple variants, create one input per variant (Shopify limitation)
-    const expanded = [];
-    imagesToLink.forEach(l => {
-      l.variantIds.forEach(vId => expanded.push({ variantId: vId, mediaIds: [l.imageId] }));
-    });
+    console.log(`🔗 Preparing media detach/append for ${imagesToLink.length} image sets ...`);
 
-    const mutation = `
-      mutation ProductVariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
-        productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
-          productVariants { id }
-          userErrors { field message }
+    // Build detach inputs (remove ANY existing media for the variant if different from desired)
+    const detachInputs = [];
+    imagesToLink.forEach(({ id: desiredId, variantIds }) => {
+      variantIds.forEach(vId => {
+        const currentSet = variantImageMap.get(vId) || new Set();
+        // Detach if the variant currently has other media or the desiredId is not the only one
+        const idsToDetach = Array.from(currentSet).filter(mid => mid !== desiredId);
+        if (idsToDetach.length) {
+          detachInputs.push({ variantId: vId, mediaIds: idsToDetach });
         }
-      }
-    `;
-
-    const response = await fetch(`${baseUrl}/graphql.json`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        query: mutation,
-        variables: { productId, variantMedia: expanded }
-      })
+      });
     });
 
-    const result = await response.json();
+    if (detachInputs.length) {
+      console.log(`🗑️ Detaching existing media from ${detachInputs.length} variant(s) first ...`);
+      const detachMutation = `
+        mutation ProductVariantDetachMedia($productId: ID!, $variantMedia: [ProductVariantDetachMediaInput!]!) {
+          productVariantDetachMedia(productId: $productId, variantMedia: $variantMedia) {
+            userErrors { field message }
+          }
+        }
+      `;
 
-    if (result.errors) {
-      throw new Error(`Failed to append media: ${JSON.stringify(result.errors)}`);
+      const detachRes = await fetch(`${baseUrl}/graphql.json`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          query: detachMutation,
+          variables: { productId: prodId, variantMedia: detachInputs }
+        })
+      });
+
+      const detachJson = await detachRes.json();
+      if (detachJson.errors) {
+        throw new Error(`Failed to detach media: ${JSON.stringify(detachJson.errors)}`);
+      }
+      const du = detachJson.data.productVariantDetachMedia.userErrors;
+      if (du && du.length) {
+        throw new Error(`Media detach errors: ${JSON.stringify(du)}`);
+      }
     }
 
-    const userErrors = result.data.productVariantAppendMedia.userErrors;
-    if (userErrors && userErrors.length) {
-      throw new Error(`Image linking errors: ${JSON.stringify(userErrors)}`);
-    }
+    if (imagesToLink.length) {
+      console.log(`🔗 Appending media to variants via productVariantAppendMedia ...`);
 
-    console.log(`✅ Successfully linked images to variants`);
+      // one input per variant/id pair (Shopify limitation)
+      const expanded = [];
+      imagesToLink.forEach(l => {
+        l.variantIds.forEach(vId => expanded.push({ variantId: vId, mediaIds: [l.id] }));
+      });
+
+      const appendMutation = `
+        mutation ProductVariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+          productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+            userErrors { field message }
+          }
+        }
+      `;
+
+      const appendRes = await fetch(`${baseUrl}/graphql.json`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          query: appendMutation,
+          variables: { productId: prodId, variantMedia: expanded }
+        })
+      });
+
+      const appendJson = await appendRes.json();
+      if (appendJson.errors) {
+        throw new Error(`Failed to append media: ${JSON.stringify(appendJson.errors)}`);
+      }
+      const ue = appendJson.data.productVariantAppendMedia.userErrors;
+      if (ue && ue.length) {
+        throw new Error(`Image linking errors: ${JSON.stringify(ue)}`);
+      }
+
+      console.log(`✅ Successfully linked images to variants`);
+    } else {
+      console.log('⚠️ No images require linking');
+    }
 
     return {
       success: true,

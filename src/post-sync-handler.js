@@ -73,6 +73,39 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
     return { uploaded: uploadedMedia, linked: [], mediaUserErrors: uploadErrors };
   }
 
+  // Get current variant → media mapping to decide detaches
+  const variantsRes = await shopifyClient.request(
+    `query VariantMedia($id: ID!) { product(id: $id) { variants(first: 250) { edges { node { id image { id } } } } } }`,
+    { id: productId }
+  );
+
+  const currentMediaMap = new Map(); // variantId -> imageId
+  variantsRes.product.variants.edges.forEach(e => {
+    if (e.node.image?.id) currentMediaMap.set(e.node.id, e.node.image.id);
+  });
+
+  // Build detaches (one per variant that already has a different image)
+  const detachInputs = [];
+  variantIds.forEach(vId => {
+    const existing = currentMediaMap.get(vId);
+    if (existing) detachInputs.push({ variantId: vId, mediaIds: [existing] });
+  });
+
+  if (detachInputs.length) {
+    console.log(`🗑️ Detaching media from ${detachInputs.length} variant(s) before append ...`);
+    const detachMutation = `
+      mutation Detach($productId: ID!, $variantMedia: [ProductVariantDetachMediaInput!]!) {
+        productVariantDetachMedia(productId: $productId, variantMedia: $variantMedia) { userErrors { field message } }
+      }
+    `;
+    const detRes = await shopifyClient.request(detachMutation, { productId, variantMedia: detachInputs });
+    const detErr = detRes.productVariantDetachMedia.userErrors || [];
+    if (detErr.length) {
+      console.warn('⚠️ Detach userErrors:', detErr);
+    }
+  }
+
+  // Build variantMediaInputs
   const variantMediaInputs = [];
   if (variantIds.length === uploadedMedia.length) {
     // one-to-one by index

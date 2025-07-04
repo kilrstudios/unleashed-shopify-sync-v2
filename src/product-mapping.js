@@ -334,33 +334,57 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             mainProduct.ProductSubGroup?.GroupName,
             mainProduct.ProductGroup?.GroupName
           ].filter(Boolean),
-          images: group.reduce((allImages, product) => {
-            // 1. Unleashed Images array (preferred)
-            if (product.Images && product.Images.length > 0) {
-              allImages.push(...product.Images.map(img => ({
-                src: img.Url,
-                alt: `Image for ${product.ProductCode}`
-              })));
-            }
+          images: (() => {
+            const temp = group.reduce((allImages, product) => {
+              // 1. Unleashed Images array (preferred)
+              if (product.Images && product.Images.length > 0) {
+                allImages.push(...product.Images.map(img => ({
+                  src: img.Url,
+                  alt: `Image for ${product.ProductCode}`
+                })));
+              }
 
-            // 2. Fallback to ImageUrl field on the product
-            if (product.ImageUrl) {
-              allImages.push({
-                src: product.ImageUrl,
-                alt: `Image for ${product.ProductCode}`
-              });
-            }
+              // 2. Fallback to ImageUrl field on the product
+              if (product.ImageUrl) {
+                allImages.push({
+                  src: product.ImageUrl,
+                  alt: `Image for ${product.ProductCode}`
+                });
+              }
 
-            // 3. Legacy Attachments array (if ever used)
-            if (product.Attachments && product.Attachments.length > 0) {
-              allImages.push(...product.Attachments.map(att => ({
-                src: att.DownloadUrl || att.Url,
-                alt: att.Description || `Image for ${product.ProductCode}`
-              })));
-            }
+              // 3. Legacy Attachments array (if ever used)
+              if (product.Attachments && product.Attachments.length > 0) {
+                allImages.push(...product.Attachments.map(att => ({
+                  src: att.DownloadUrl || att.Url,
+                  alt: att.Description || `Image for ${product.ProductCode}`
+                })));
+              }
 
-            return allImages;
-          }, []),
+              return allImages;
+            }, []);
+
+            // Deduplicate by canonical key
+            const baseKey = (url) => {
+              if (!url) return '';
+              try {
+                const u = new URL(url);
+                return u.pathname.split('/').pop().split('?')[0].toLowerCase();
+              } catch {
+                return url.split('/').pop().split('?')[0].toLowerCase();
+              }
+            };
+
+            const seen = new Set();
+            const unique = [];
+            temp.forEach(img => {
+              const key = baseKey(img.src);
+              if (!seen.has(key)) {
+                seen.add(key);
+                unique.push(img);
+              }
+            });
+            return unique;
+          })(),
           options: isMultiVariant ? 
             optionNames.map(name => ({ name })) :
             [{ name: 'Title' }],

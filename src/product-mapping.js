@@ -174,19 +174,14 @@ function getAttributeValue(attributeSet, attributeName) {
   return attribute ? attribute.Value : null;
 }
 
-function extractVariantOptions(attributeSet, fallbackValue) {
-  if (!attributeSet) return { option1: fallbackValue || 'Default Title' };
+function extractVariantOptions(attributeSet) {
+  if (!attributeSet) return { option1: 'Default Title' };
   
-  const opt1 = getAttributeValue(attributeSet, 'Option 1 Value');
-  const opt2 = getAttributeValue(attributeSet, 'Option 2 Value');
-  const opt3 = getAttributeValue(attributeSet, 'Option 3 Value');
-
-  // If *no* option values are present, fall back to a unique identifier (SKU)
-  if (!opt1 && !opt2 && !opt3 && fallbackValue) {
-    return { option1: fallbackValue };
-  }
-
-  return { option1: opt1, option2: opt2, option3: opt3 };
+  return {
+    option1: getAttributeValue(attributeSet, 'Option 1 Value'),
+    option2: getAttributeValue(attributeSet, 'Option 2 Value'),
+    option3: getAttributeValue(attributeSet, 'Option 3 Value')
+  };
 }
 
 function extractProductOptions(attributeSet) {
@@ -219,23 +214,21 @@ function groupUnleashedProducts(products) {
   console.log(`Processing ${products.length} Unleashed products...`);
   
   for (const product of products) {
-    // Skip products that shouldn't be synced
     const isComponent = product.IsComponent;
     const isNotSellable = !product.IsSellable;
-    
-    if (isComponent || isNotSellable) {
+
+    // NEW FILTERING RULE:
+    //   – Skip ONLY when the product is NOT sellable.
+    //   – Components are now allowed through as long as they are sellable.
+    if (isNotSellable) {
       filteredCount++;
-      if (isComponent && isNotSellable) {
-        filterReasons.both++;
-        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Component & Not Sellable)`);
-      } else if (isComponent) {
-        filterReasons.isComponent++;
-        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Component)`);
-      } else if (isNotSellable) {
-        filterReasons.notSellable++;
-        console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Not Sellable)`);
-      }
+      filterReasons.notSellable++;
+      console.log(`Filtered: ${product.ProductCode} - ${product.ProductDescription} (Not Sellable)`);
       continue;
+    }
+    // Components are no longer filtered; log for visibility if needed
+    if (isComponent) {
+      console.log(`Component product included: ${product.ProductCode} - ${product.ProductDescription}`);
     }
 
     // Debug: Log AttributeSet data for grouping analysis
@@ -251,9 +244,23 @@ function groupUnleashedProducts(products) {
       console.log(`   No AttributeSet - will use ProductDescription as groupKey`);
     }
 
-    const groupKey = product.AttributeSet ? 
-      getAttributeValue(product.AttributeSet, 'Product Title') || product.ProductDescription : 
-      product.ProductDescription;
+    // NEW GROUPING LOGIC ----------------------------------------------
+    //  • Only group SKUs together when the product has an AttributeSet AND
+    //    a non-empty "Product Title" attribute (explicit grouping signal).
+    //  • Otherwise, treat each SKU as its own group (key = ProductCode).
+    let groupKey;
+    if (product.AttributeSet) {
+      const attrTitle = getAttributeValue(product.AttributeSet, 'Product Title');
+      if (attrTitle && attrTitle.trim() !== '') {
+        groupKey = attrTitle.trim();
+      } else {
+        // No explicit group title – keep SKUs separate
+        groupKey = product.ProductCode;
+      }
+    } else {
+      // No AttributeSet – keep SKUs separate
+      groupKey = product.ProductCode;
+    }
     console.log(`   🎯 Final groupKey: "${groupKey}"`);
     
     if (!groups.has(groupKey)) {
@@ -274,7 +281,15 @@ function groupUnleashedProducts(products) {
   console.log(`- Remaining for sync: ${products.length - filteredCount}`);
   console.log(`- Product groups created: ${groups.size}`);
 
-  return Array.from(groups.values());
+  return {
+    groupsMap: groups,
+    stats: {
+      totalProducts: products.length,
+      filteredCount,
+      filterReasons,
+      groupsCreated: groups.size
+    }
+  };
 }
 
 // defaultWarehouseCode: string | null – the tenant-wide default warehouse code
@@ -285,15 +300,19 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
     toArchive: [],
     skipped: [],
     processed: 0,
-    errors: []
+    errors: [],
+    details: null
   };
 
   try {
-    // Group Unleashed products by AttributeSet.ProductTitle
-    const productGroups = groupUnleashedProducts(unleashedProducts);
+    // Group Unleashed products and get stats
+    const { groupsMap: productGroupsMap, stats: groupingStats } = groupUnleashedProducts(unleashedProducts);
+
+    // Attach stats for front-end debugging
+    results.details = groupingStats;
 
     // Process each group (or single product)
-    for (const [groupKey, group] of productGroups.entries()) {
+    for (const [groupKey, group] of productGroupsMap.entries()) {
       try {
         const mainProduct = group[0];
         const isMultiVariant = group.length > 1;
@@ -329,15 +348,9 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
 
         // Get option names from the first product with AttributeSet
         const productWithOptions = group.find(p => p.AttributeSet && getAttributeValue(p.AttributeSet, 'Option Names'));
-        let optionNames = productWithOptions ? 
+        const optionNames = productWithOptions ? 
           parseOptionNames(getAttributeValue(productWithOptions.AttributeSet, 'Option Names')) :
           [];
-
-        // If the group is multi-variant but Unleashed has not defined option names, we
-        // fall back to a single option "SKU" so each variant can be distinguished.
-        if (isMultiVariant && optionNames.length === 0) {
-          optionNames = ['SKU'];
-        }
 
         // Prepare product data
         const productData = {
@@ -435,7 +448,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             const variantsMap = new Map();
 
             group.forEach(product => {
-              const variantOptions = extractVariantOptions(product.AttributeSet, product.ProductCode);
+              const variantOptions = extractVariantOptions(product.AttributeSet);
 
               // Build a composite key from option values (undefined treated as '')
               const vKey = [variantOptions.option1 || '', variantOptions.option2 || '', variantOptions.option3 || ''].join('|');
@@ -497,7 +510,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                   },
                   inventoryQuantities: inventoryQuantities,
                   inventory_levels: inventoryQuantities, // alias
-                  option1: variantOptions.option1 || product.ProductCode,
+                  option1: variantOptions.option1,
                   option2: variantOptions.option2,
                   option3: variantOptions.option3,
                   metafields: Array.from({ length: 10 }, (_, i) => {
@@ -538,44 +551,35 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
 
           if (skusMatch) {
             console.log(`   🔗 SKU verification: MATCH`);
-            
-            // Compare data to check if update is needed
-            const differences = compareProductData(productData, matchingProduct);
-            if (differences.hasChanges) {
-              console.log(`   🔄 Changes detected - will UPDATE product:`);
-              differences.differences.forEach(diff => console.log(`      - ${diff}`));
+          }
+
+          // -----------------------------------------------------
+          // Determine SKUs to ADD and REMOVE
+          // -----------------------------------------------------
+          const excessShopifyVariants = matchingProduct.variants.filter(v => !unleashedSkus.has(v.sku));
+          if (excessShopifyVariants.length) {
+            productData.variantsToRemove = excessShopifyVariants.map(v => v.id);
+            console.log(`   ➖ ${excessShopifyVariants.length} variant(s) will be REMOVED from existing product.`);
+          }
+
+          // Compare data for other field changes
+          const differences = compareProductData(productData, matchingProduct);
+
+          if (differences.hasChanges || (productData.variantsToRemove && productData.variantsToRemove.length)) {
+            console.log(`   🔄 Changes detected - will UPDATE product:`);
+            differences.differences.forEach(diff => console.log(`      - ${diff}`));
+
             productData.id = matchingProduct.id;
             results.toUpdate.push(productData);
-            } else {
-              console.log(`   ✅ Product is IDENTICAL to existing Shopify product`);
-              if (differences.needsPostSync.inventory || differences.needsPostSync.images) {
-                console.log(`   🔄 Post-sync operations needed:`);
-                if (differences.needsPostSync.inventory) console.log(`      - Inventory updates`);
-                if (differences.needsPostSync.images) console.log(`      - Image updates`);
-                productData.id = matchingProduct.id;
-                productData.needsPostSync = differences.needsPostSync;
-                results.skipped.push({
-                  title: matchingProduct.title,
-                  id: matchingProduct.id,
-                  variantCount: matchingProduct.variants.length,
-                  reason: 'identical_data',
-                  needsPostSync: differences.needsPostSync
-                });
-              } else {
-                console.log(`   📊 No changes or post-sync operations needed - SKIPPING`);
-              results.skipped.push({
-                  title: matchingProduct.title,
-                id: matchingProduct.id,
-                  variantCount: matchingProduct.variants.length,
-                  reason: 'identical_data',
-                  needsPostSync: { inventory: false, images: false }
-              });
-              }
-            }
           } else {
-            console.log(`   ❌ SKU verification FAILED - will CREATE new product with modified handle`);
-            productData.handle = `${handle}-${Date.now()}`;
-            results.toCreate.push(productData);
+            console.log(`   ✅ Product is IDENTICAL to existing Shopify product (after SKU check)`);
+            results.skipped.push({
+              title: matchingProduct.title,
+              id: matchingProduct.id,
+              variantCount: matchingProduct.variants.length,
+              reason: 'identical_data',
+              needsPostSync: differences.needsPostSync || { inventory: false, images: false }
+            });
           }
         } else {
           // Create new product
@@ -593,56 +597,40 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
       }
     }
 
-    // Find Shopify products to archive
-    const unleashedHandles = new Set(Array.from(productGroups.entries()).map(([_, group]) => {
-      const mainProduct = group[0];
-      const productTitle = group.length > 1 
-        ? getAttributeValue(mainProduct.AttributeSet, 'Product Title')
-        : mainProduct.ProductDescription;
-      return slugify(productTitle);
-    }));
-    
+    // ---------------- ARCHIVE LOGIC REWRITE ----------------
+    // A Shopify product is archived ONLY if **none** of its variant SKUs
+    // are present in the current Unleashed dataset.
+
+    const unleashedSkuSet = new Set(unleashedProducts.map(p => p.ProductCode));
+
     const productsToArchive = shopifyProducts
-      .filter(sp => !sp.status.includes('ARCHIVED') && !unleashedHandles.has(sp.handle))
-      .map(sp => ({
-        id: sp.id,
-        status: 'ARCHIVED'
-      }));
+      .filter(sp => {
+        if (sp.status.includes('ARCHIVED')) return false; // already archived
+        const variantSkus = (sp.variants || []).map(v => v.sku).filter(Boolean);
+        // Keep if ANY variant SKU exists in Unleashed
+        const hasMatch = variantSkus.some(sku => unleashedSkuSet.has(sku));
+        return !hasMatch;
+      })
+      .map(sp => ({ id: sp.id, status: 'ARCHIVED' }));
 
     results.toArchive.push(...productsToArchive);
 
     // Debug: Final mapping summary
-    console.log(`\n🎯 === PRODUCT MAPPING SUMMARY ===`);
-    console.log(`📊 Total processed: ${results.processed}`);
-    console.log(`🆕 Products to CREATE: ${results.toCreate.length}`);
-    if (results.toCreate.length > 0) {
-      console.log(`   CREATE list:`);
-      results.toCreate.forEach((p, i) => {
-        console.log(`      ${i + 1}. "${p.title}" (handle: "${p.handle}") - ${p.variants.length} variants`);
-      });
-    }
-    console.log(`🔄 Products to UPDATE: ${results.toUpdate.length}`);
-    if (results.toUpdate.length > 0) {
-      console.log(`   UPDATE list:`);
-      results.toUpdate.forEach((p, i) => {
-        console.log(`      ${i + 1}. "${p.title}" (ID: ${p.id}) - ${p.variants.length} variants`);
-      });
-    }
-    console.log(`⏭️ Products SKIPPED (identical): ${results.skipped.length}`);
-    if (results.skipped.length > 0) {
-      console.log(`   SKIPPED list:`);
-      results.skipped.forEach((p, i) => {
-        console.log(`      ${i + 1}. "${p.title}" (ID: ${p.id}) - ${p.variantCount} variants - ${p.reason}`);
-      });
-    }
-    console.log(`🗂️ Products to ARCHIVE: ${results.toArchive.length}`);
-    console.log(`❌ Errors: ${results.errors.length}`);
-
-    return results;
+    console.log('\n🎯 === PRODUCT MAPPING SUMMARY ===');
+    console.log(`- Total products processed: ${results.processed}`);
+    console.log(`- Products to create: ${results.toCreate.length}`);
+    console.log(`- Products to update: ${results.toUpdate.length}`);
+    console.log(`- Products to archive: ${results.toArchive.length}`);
+    console.log(`- Products skipped: ${results.skipped.length}`);
+    console.log(`- Errors encountered: ${results.errors.length}`);
   } catch (error) {
-    console.error('Error in mapProducts:', error);
-    throw error;
+    console.error('Error processing products:', error);
+    results.errors.push({
+      error: error.message
+    });
   }
+
+  return results;
 }
 
 export {
@@ -652,4 +640,4 @@ export {
   parseOptionNames,
   extractVariantOptions,
   extractProductOptions
-}; 
+};

@@ -64,8 +64,13 @@ let firstProductPayloadLogged = false; // Debug flag – log first payload only
 // the platform responds with THROTTLED errors. This dramatically reduces the
 // chance our Worker crashes a queue batch due to bursty write traffic.
 // ---------------------------------------------------------------------------
-async function shopifyGraphQLWithRetry(url, headers, payload, maxRetries = 5) {
+async function shopifyGraphQLWithRetry(url, headers, payload, {
+  maxRetries = 10,
+  baseDelayMs = 1000,
+  maxDelayMs = 60000
+} = {}) {
   let attempt = 0;
+
   while (true) {
     const resp = await fetch(url, {
       method: 'POST',
@@ -73,10 +78,12 @@ async function shopifyGraphQLWithRetry(url, headers, payload, maxRetries = 5) {
       body: JSON.stringify(payload)
     });
 
-    // Non-200 HTTP? bail unless we can retry safely (Shopify uses 200 even for
-    // GraphQL errors, but handle generic 5xx as well)
-    if (!resp.ok && resp.status >= 500 && attempt < maxRetries) {
-      const wait = Math.min(1000 * Math.pow(2, attempt), 10000);
+    // Quickly retry (with back-off) on transient HTTP 5xx errors
+    if (!resp.ok && resp.status >= 500) {
+      if (attempt >= maxRetries) {
+        throw new Error(`HTTP ${resp.status} after ${maxRetries} retries`);
+      }
+      const wait = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
       console.warn(`⚠️ HTTP ${resp.status} – retrying in ${wait}ms (attempt ${attempt + 1}/${maxRetries})`);
       await new Promise(r => setTimeout(r, wait));
       attempt++;
@@ -85,18 +92,45 @@ async function shopifyGraphQLWithRetry(url, headers, payload, maxRetries = 5) {
 
     const data = await resp.json();
 
-    // Detect Shopify throttling error in GraphQL error extensions
-    const isThrottled = Array.isArray(data.errors) && data.errors.some(e => e.extensions?.code === 'THROTTLED');
+    // ---- Normal success path ----
+    const throttleInfo =
+      data.extensions?.cost?.throttleStatus ||
+      (Array.isArray(data.errors) && data.errors[0]?.extensions?.throttleStatus);
 
-    if (isThrottled && attempt < maxRetries) {
-      const wait = Math.min(1000 * Math.pow(2, attempt), 15000);
-      console.warn(`⏳ Shopify throttled – waiting ${wait}ms then retrying (attempt ${attempt + 1}/${maxRetries})`);
-      await new Promise(r => setTimeout(r, wait));
-      attempt++;
-      continue;
+    const throttledError = Array.isArray(data.errors) && data.errors.some(e => e.extensions?.code === 'THROTTLED');
+
+    if (!throttledError) {
+      // Not throttled – but we can still pace ourselves if close to the cap
+      if (throttleInfo) {
+        const { maximumAvailable, currentlyAvailable, restoreRate } = throttleInfo;
+        // If we have less than 50 cost units left, wait for a restore window
+        if (currentlyAvailable < 50 && restoreRate > 0) {
+          const deficit = 50 - currentlyAvailable;
+          const waitMs = Math.min(((deficit / restoreRate) + 1) * 1000, maxDelayMs);
+          console.log(`⏳ Near throttle limit – waiting ${waitMs}ms to regain budget`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+      return { response: resp, data };
     }
 
-    return { response: resp, data };
+    // ---- Throttled path ----
+    if (attempt >= maxRetries) {
+      throw new Error(`Shopify throttled after ${maxRetries} retries`);
+    }
+
+    let waitMs = baseDelayMs * Math.pow(2, attempt); // fallback exponential
+    if (throttleInfo) {
+      const { maximumAvailable, currentlyAvailable, restoreRate } = throttleInfo;
+      if (restoreRate > 0) {
+        const needed = maximumAvailable - currentlyAvailable; // to fully refill
+        waitMs = Math.min(((needed / restoreRate) + 1) * 1000, maxDelayMs);
+      }
+    }
+
+    console.warn(`⏳ Shopify throttled – waiting ${waitMs}ms then retrying (attempt ${attempt + 1}/${maxRetries})`);
+    await new Promise(r => setTimeout(r, waitMs));
+    attempt++;
   }
 }
 
@@ -783,22 +817,7 @@ async function mutateProductsViaQueue(env, shopifyAuth, mappingResults, original
   };
 
   try {
-    // Queue product creates
-    for (const product of mappingResults.toCreate) {
-      const message = {
-        type: 'CREATE_PRODUCT',
-        syncId,
-        originalDomain,
-        shopDomain,
-        productData: product,
-        timestamp: new Date().toISOString()
-      };
-      
-      await env.PRODUCT_QUEUE.send(message);
-      results.queued.creates++;
-    }
-
-    // Queue product updates  
+    // Queue product updates FIRST to avoid duplicate SKU conflicts
     for (const product of mappingResults.toUpdate) {
       const message = {
         type: 'UPDATE_PRODUCT', 
@@ -811,6 +830,21 @@ async function mutateProductsViaQueue(env, shopifyAuth, mappingResults, original
       
       await env.PRODUCT_QUEUE.send(message);
       results.queued.updates++;
+    }
+
+    // Queue product creates AFTER updates
+    for (const product of mappingResults.toCreate) {
+      const message = {
+        type: 'CREATE_PRODUCT',
+        syncId,
+        originalDomain,
+        shopDomain,
+        productData: product,
+        timestamp: new Date().toISOString()
+      };
+      
+      await env.PRODUCT_QUEUE.send(message);
+      results.queued.creates++;
     }
 
     // Queue product archives
@@ -951,6 +985,29 @@ async function handleProductQueueMessage(message, env) {
         }
 
         // ---------------------------------------------------------------
+        // Optional: delete variants that are no longer part of this product
+        // ---------------------------------------------------------------
+        if (message.type === 'UPDATE_PRODUCT' && Array.isArray(message.productData.variantsToRemove) && message.productData.variantsToRemove.length > 0) {
+          for (const variantId of message.productData.variantsToRemove) {
+            try {
+              const delMutation = `mutation variantDel($id: ID!) { productVariantDelete(id: $id) { deletedProductVariantId userErrors { field message } } }`;
+              const delRes = await shopifyGraphQLWithRetry(
+                `${baseUrl}/graphql.json`,
+                headers,
+                { query: delMutation, variables: { id: variantId } }
+              );
+              if (delRes.data?.data?.productVariantDelete?.userErrors?.length) {
+                console.warn(`⚠️ Variant delete userErrors for ${variantId}:`, JSON.stringify(delRes.data.data.productVariantDelete.userErrors));
+              } else {
+                console.log(`➖ Deleted obsolete variant ${variantId}`);
+              }
+            } catch (delErr) {
+              console.error(`🚨 Failed to delete variant ${variantId}:`, delErr);
+            }
+          }
+        }
+
+        // ---------------------------------------------------------------
         // Build mutation payload and log the very first one for debugging
         // ---------------------------------------------------------------
         const variables = buildProductSetInput(message.productData, message.type === 'UPDATE_PRODUCT');
@@ -1001,12 +1058,34 @@ async function handleProductQueueMessage(message, env) {
           throw new Error(`Product errors: ${JSON.stringify(data.data.productSet.userErrors)}`);
         }
 
-        result = data.data?.productSet?.product;
+        const productSetResult = data.data?.productSet;
+        if (!productSetResult) {
+          throw new Error('Missing productSet result in GraphQL response');
+        }
+
+        result = productSetResult.product;
         console.log(`✅ Successfully ${message.type === 'CREATE_PRODUCT' ? 'created' : 'updated'} product: ${result.title}`);
 
-        // TODO: Trigger inventory and image callbacks here
+        // -----------------------------------------------------------------
+        // 📸   IMAGE POST-PROCESSING (variant image uploads & linking)
+        // -----------------------------------------------------------------
+        if (message.productData.images && message.productData.images.length > 0) {
+          try {
+            console.log(`🖼️ Queue consumer: processing images after productSet …`);
+            const imgRes = await handleVariantImages(baseUrl, headers, productSetResult, message.productData);
+            if (imgRes && imgRes.success !== false) {
+              console.log(`✅ Image processing complete for ${result.title}`);
+            } else {
+              console.warn(`⚠️ Image processing reported issues for ${result.title}:`, imgRes);
+            }
+          } catch (imgErr) {
+            console.error(`🚨 Image processing failed for ${result.title}:`, imgErr);
+            // Do NOT fail the whole message – the product is already created/updated.
+          }
+        }
+
+        // TODO: Trigger inventory callback here if required
         // await triggerInventoryCallback(result, message, env);
-        // await triggerImageCallback(result, message, env);
         
         break;
 
@@ -1846,7 +1925,9 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     // ------------------------------------------------------
     const variantImageMap = new Map(); // variantId → Set(mediaIds)
 
-    productResult.product.variants.edges.forEach(edge => {
+    const variantEdges = productResult?.product?.variants?.edges || [];
+
+    variantEdges.forEach(edge => {
       const vId = edge.node.id;
       // Collect MediaImage IDs attached to this variant
       (edge.node.media?.edges || []).forEach(mEdge => {
@@ -1938,7 +2019,7 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     // ------------------------------------------------
     // SKU → variantId map
     const variantIdMap = new Map();
-    productResult.product.variants.edges.forEach(edge => variantIdMap.set(edge.node.sku, edge.node.id));
+    variantEdges.forEach(edge => variantIdMap.set(edge.node.sku, edge.node.id));
 
     const imagesToLink = [];
 
@@ -2143,23 +2224,19 @@ async function getProductImages(baseUrl, headers, productId) {
     }
   `;
 
-  const response = await fetch(`${baseUrl}/graphql.json`, {
-    method: 'POST',
+  const { data, response } = await shopifyGraphQLWithRetry(
+    `${baseUrl}/graphql.json`,
     headers,
-    body: JSON.stringify({
-      query,
-      variables: { productId }
-    })
-  });
+    { query, variables: { productId } }
+  );
 
-  const result = await response.json();
-  
-  if (result.errors) {
-    throw new Error(`Failed to get product images: ${JSON.stringify(result.errors)}`);
+  if (data.errors) {
+    throw new Error(`Failed to get product images: ${JSON.stringify(data.errors)}`);
   }
 
-  // Map the MediaImage nodes to a simpler {id, originalSrc, guid} shape
-  return result.data.product.media.edges.map(edge => ({
+  const mediaEdges = data.data?.product?.media?.edges || [];
+
+  return mediaEdges.map(edge => ({
     id: edge.node.id,
     originalSrc: edge.node.image.url || edge.node.image.originalSrc,
     guid: (edge.node.metafield?.value) || (() => {

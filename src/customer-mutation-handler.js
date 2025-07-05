@@ -5,7 +5,7 @@
 
 import { pullAllData } from './data_pull.js';
 import { mapCustomers } from './customer-mapping.js';
-import { mutateCustomers } from './customer-mutations.js';
+import { mutateCustomersViaQueue } from './customer-mutations.js';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -105,9 +105,9 @@ export async function handleCustomerMutations(request, env) {
     console.log('🗺️ Starting customer mapping for mutations...');
     const customerMappingResults = await mapCustomers(data.unleashed.contacts, data.unleashed.customers, data.shopify.customers);
     
-    // Execute customer mutations
-    console.log('🔄 Starting customer mutations...');
-    const mutationResults = await mutateCustomers(authData.shopify, customerMappingResults);
+    // Queue customer mutations
+    console.log('📋 Queueing customer mutations...');
+    const mutationResults = await mutateCustomersViaQueue(env, authData.shopify.shopDomain, customerMappingResults, domain);
 
     console.log('✅ Customer mutations completed successfully');
 
@@ -120,17 +120,7 @@ export async function handleCustomerMutations(request, env) {
         errors: customerMappingResults.errors.length,
         processed: customerMappingResults.processed
       },
-      mutationResults: {
-        created: {
-          successful: mutationResults.created.successful.length,
-          failed: mutationResults.created.failed.length
-        },
-        updated: {
-          successful: mutationResults.updated.successful.length,
-          failed: mutationResults.updated.failed.length
-        },
-        summary: mutationResults.summary
-      },
+      queueResults: mutationResults,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -214,7 +204,7 @@ export async function handleCustomerSync(request, env) {
 
     // Step 3: Execute mutations on Shopify
     console.log('🔄 Step 3: Executing customer mutations on Shopify...');
-    const mutationResults = await mutateCustomers(authData.shopify, customerMappingResults);
+    const mutationResults = await mutateCustomersViaQueue(env, authData.shopify.shopDomain, customerMappingResults, domain);
 
     console.log('✅ Complete customer sync workflow completed successfully');
 
@@ -239,15 +229,7 @@ export async function handleCustomerSync(request, env) {
           processed: customerMappingResults.processed
         },
         mutations: {
-          created: {
-            successful: mutationResults.created.successful.length,
-            failed: mutationResults.created.failed.length
-          },
-          updated: {
-            successful: mutationResults.updated.successful.length,
-            failed: mutationResults.updated.failed.length
-          },
-          summary: mutationResults.summary,
+          queueResults: mutationResults,
           debugErrors: mutationResults.debugErrors || []
         }
       },

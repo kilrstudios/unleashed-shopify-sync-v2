@@ -15,3 +15,23 @@ binding = "PRODUCT_QUEUE"
 queue = "product-mutations"
 max_batch_size = 1
 max_batch_timeout = 30 
+
+# Queue for location mutations
+[[queues.producers]]
+queue = "location-mutations"
+binding = "LOCATION_QUEUE"
+
+[[queues.consumers]]
+queue = "location-mutations"
+max_batch_size = 10
+max_batch_timeout = 30
+
+# Queue for customer mutations
+[[queues.producers]]
+queue = "customer-mutations"
+binding = "CUSTOMER_QUEUE"
+
+[[queues.consumers]]
+queue = "customer-mutations"
+max_batch_size = 10
+max_batch_timeout = 30 

@@ -73,23 +73,40 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
     return { uploaded: uploadedMedia, linked: [], mediaUserErrors: uploadErrors };
   }
 
-  // Get current variant → media mapping to decide detaches
+  // Fetch current MEDIA attachments for each variant (2025-04 API)
   const variantsRes = await shopifyClient.request(
-    `query VariantMedia($id: ID!) { product(id: $id) { variants(first: 250) { edges { node { id image { id } } } } } }`,
+    `query VariantMedia($id: ID!) {
+       product(id: $id) {
+         variants(first: 250) {
+           edges {
+             node {
+               id
+               media(first: 10) {
+                 edges { node { id mediaContentType } }
+               }
+             }
+           }
+         }
+       }
+     }`,
     { id: productId }
   );
 
-  const currentMediaMap = new Map(); // variantId -> imageId
-  variantsRes.product.variants.edges.forEach(e => {
-    if (e.node.image?.id) currentMediaMap.set(e.node.id, e.node.image.id);
+  // Build a map of variantId → array<mediaId>
+  const currentMediaMap = new Map();
+  variantsRes.product.variants.edges.forEach(edge => {
+    const vId = edge.node.id;
+    const ids = (edge.node.media?.edges || []).map(me => me.node.id);
+    if (ids.length) currentMediaMap.set(vId, ids);
   });
 
-  // Build detaches (one per variant that already has a different image)
-  const detachInputs = [];
-  variantIds.forEach(vId => {
-    const existing = currentMediaMap.get(vId);
-    if (existing) detachInputs.push({ variantId: vId, mediaIds: [existing] });
-  });
+  // Prepare detach inputs – group per variant (variantId must be unique)
+  const detachInputs = variantIds
+    .map(vId => {
+      const existingIds = currentMediaMap.get(vId) || [];
+      return existingIds.length ? { variantId: vId, mediaIds: [existingIds[0]] } : null;
+    })
+    .filter(Boolean);
 
   if (detachInputs.length) {
     console.log(`🗑️ Detaching media from ${detachInputs.length} variant(s) before append ...`);
@@ -146,93 +163,14 @@ async function uploadAndLinkProductImages(shopifyClient, productId, variantIds, 
 }
 
 async function handlePostSyncOperations(shopifyClient, unleashedProducts, shopifyProducts) {
-  const results = {
+  // 🚫 Image post-sync disabled (handled earlier by handleVariantImages). Skip to avoid duplicate uploads.
+  console.log('⚠️ Image post-sync disabled – skipping handlePostSyncOperations');
+  return {
     images: {
       successful: [],
       failed: []
     }
   };
-
-  try {
-    console.log(`\n📦 Starting post-sync operations...`);
-
-    // Process each product
-    for (const unleashedProduct of unleashedProducts) {
-      const shopifyProduct = shopifyProducts.find(sp => 
-        sp.variants.some(v => v.sku === unleashedProduct.ProductCode)
-      );
-
-      if (!shopifyProduct) {
-        console.log(`⚠️ No matching Shopify product found for ${unleashedProduct.ProductCode} - skipping post-sync operations`);
-        continue;
-      }
-
-      // Collect image sources from Images, ImageUrl, and Attachments
-      const imageSources = [];
-      if (unleashedProduct.Images && unleashedProduct.Images.length > 0) {
-        imageSources.push(...unleashedProduct.Images.map(img => ({
-          url: img.Url,
-          alt: unleashedProduct.ProductDescription
-        })));
-      }
-      if (unleashedProduct.ImageUrl) {
-        imageSources.push({
-          url: unleashedProduct.ImageUrl,
-          alt: unleashedProduct.ProductDescription
-        });
-      }
-      if (unleashedProduct.Attachments && unleashedProduct.Attachments.length > 0) {
-        imageSources.push(...unleashedProduct.Attachments.map(att => ({
-          url: att.DownloadUrl || att.Url,
-          alt: att.Description || unleashedProduct.ProductDescription
-        })));
-      }
-
-      if (imageSources.length > 0) {
-        console.log(`\n🖼️ Processing images for product ${unleashedProduct.ProductCode}...`);
-
-        try {
-          const variantIds = shopifyProduct.variants.map(v => v.id);
-          const uploadResult = await uploadAndLinkProductImages(
-            shopifyClient,
-            shopifyProduct.id,
-            variantIds,
-            imageSources
-          );
-
-          if (uploadResult.mediaUserErrors.length > 0) {
-            console.error('❌ Image processing errors:', uploadResult.mediaUserErrors);
-            results.images.failed.push({
-              productCode: unleashedProduct.ProductCode,
-              errors: uploadResult.mediaUserErrors
-            });
-          } else {
-            console.log('✅ Images uploaded & linked');
-            results.images.successful.push({
-              productCode: unleashedProduct.ProductCode,
-              uploaded: uploadResult.uploaded.length,
-              linked: uploadResult.linked.length
-            });
-          }
-        } catch (error) {
-          console.error(`❌ Image processing failed for ${unleashedProduct.ProductCode}:`, error);
-          results.images.failed.push({
-            productCode: unleashedProduct.ProductCode,
-            error: error.message
-          });
-        }
-      }
-    }
-
-    console.log('\n📊 Post-sync operations summary:');
-    console.log(`✅ Image updates: ${results.images.successful.length} successful, ${results.images.failed.length} failed`);
-
-    return results;
-
-  } catch (error) {
-    console.error('❌ Error in handlePostSyncOperations:', error);
-    throw error;
-  }
 }
 
 export { handlePostSyncOperations }; 

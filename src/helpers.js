@@ -1,4 +1,5 @@
 function slugify(text) {
+  if (text === null || text === undefined) return '';
   return text
     .toString()
     .toLowerCase()
@@ -11,9 +12,11 @@ function slugify(text) {
 }
 
 function validateEmail(email) {
+  if (!email) throw new Error('Email is empty');
+  const clean = email.trim();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (emailRegex.test(email)) {
-    return email;
+  if (emailRegex.test(clean)) {
+    return clean;
   }
   throw new Error(`Invalid email format: ${email}`);
 }

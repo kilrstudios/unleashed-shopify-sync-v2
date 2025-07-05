@@ -8,8 +8,8 @@ import { getDefaultWarehouseCode } from './helpers.js';
 import { mapLocations } from './location-mapping.js';
 import { mapCustomers } from './customer-mapping.js';
 import { mapProducts } from './product-mapping.js';
-import { mutateLocations } from './location-mutations.js';
-import { mutateCustomers } from './customer-mutations.js';
+import { mutateLocationsViaQueue } from './location-mutations.js';
+import { mutateCustomersViaQueue } from './customer-mutations.js';
 import { mutateProducts } from './product-mutations.js';
 
 // Helper function to get auth data from KV store
@@ -158,7 +158,7 @@ export async function handleComprehensiveSync(request, env) {
         
         // Execute location mutations
         console.log('🔄 Step 2b: Executing location mutations...');
-        const locationMutationResults = await mutateLocations(authData.shopify, locationMappingResults);
+        const locationMutationResults = await mutateLocationsViaQueue(env, authData.shopify.shopDomain, locationMappingResults, domain);
 
         results.steps.locationSync = {
           success: true,
@@ -170,14 +170,8 @@ export async function handleComprehensiveSync(request, env) {
             processed: locationMappingResults.processed
           },
           mutations: {
-            created: {
-              successful: locationMutationResults.created.successful.length,
-              failed: locationMutationResults.created.failed.length
-            },
-            updated: {
-              successful: locationMutationResults.updated.successful.length,
-              failed: locationMutationResults.updated.failed.length
-            },
+            method: locationMutationResults.method,
+            queued: locationMutationResults.queued,
             summary: locationMutationResults.summary
           }
         };
@@ -208,7 +202,7 @@ export async function handleComprehensiveSync(request, env) {
         
         // Execute customer mutations
         console.log('🔄 Step 3b: Executing customer mutations...');
-        const customerMutationResults = await mutateCustomers(authData.shopify, customerMappingResults);
+        const customerMutationResults = await mutateCustomersViaQueue(env, authData.shopify.shopDomain, customerMappingResults, domain);
 
         results.steps.customerSync = {
           success: true,
@@ -220,14 +214,8 @@ export async function handleComprehensiveSync(request, env) {
             processed: customerMappingResults.processed
           },
           mutations: {
-            created: {
-              successful: customerMutationResults.created.successful.length,
-              failed: customerMutationResults.created.failed.length
-            },
-            updated: {
-              successful: customerMutationResults.updated.successful.length,
-              failed: customerMutationResults.updated.failed.length
-            },
+            method: customerMutationResults.method,
+            queued: customerMutationResults.queued,
             summary: customerMutationResults.summary
           }
         };
@@ -545,10 +533,10 @@ export async function handleOptimizedSync(request, env) {
     
     // Step 3: Run mutations sequentially to avoid rate limits
     console.log('🔄 Step 3a: Executing location mutations...');
-    const locationMutationResults = await mutateLocations(authData.shopify, locationMappingResults);
+    const locationMutationResults = await mutateLocationsViaQueue(env, authData.shopify.shopDomain, locationMappingResults, domain);
     
     console.log('🔄 Step 3b: Executing customer mutations...');
-    const customerMutationResults = await mutateCustomers(authData.shopify, customerMappingResults);
+    const customerMutationResults = await mutateCustomersViaQueue(env, authData.shopify.shopDomain, customerMappingResults, domain);
     
     const totalDuration = Date.now() - startTime;
     

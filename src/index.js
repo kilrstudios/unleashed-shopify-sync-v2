@@ -12,6 +12,8 @@ import { handleCustomerMutations, handleCustomerSync } from './customer-mutation
 import { handleProductMutations, handleProductSync } from './product-mutation-handler.js';
 import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
 import { handleProductQueueMessage, handleInventoryUpdate, handleImageUpdate } from './product-mutations.js';
+import { handleLocationQueueMessage } from './location-mutations.js';
+import { handleCustomerQueueMessage } from './customer-mutations.js';
 import { getDefaultWarehouseCode } from './helpers.js';
 
 // CORS headers for all responses
@@ -280,6 +282,14 @@ function serveClientScript() {
   });
 }
 
+// Utility: silence console.log unless LOG_VERBOSE env var === "true"
+function applyLogVerbosity(env) {
+  if (!env || env.LOG_VERBOSE === 'true') return; // keep logs if explicitly enabled
+  const noop = () => {};
+  console.log = noop;
+  console.debug = noop;
+}
+
 async function handleDataFetch(request, env) {
   try {
     // Get domain from request
@@ -408,6 +418,9 @@ async function handleDataFetch(request, env) {
 
 export default {
   async fetch(request, env, ctx) {
+    // Apply log verbosity setting for this request
+    applyLogVerbosity(env);
+
     // Handle CORS preflight requests
     if (request.method === 'OPTIONS') {
       return new Response(null, {
@@ -479,12 +492,26 @@ export default {
 
   // Queue consumer for product mutations
   async queue(batch, env) {
+    // Apply log verbosity for queue consumer executions
+    applyLogVerbosity(env);
+
     console.log(`🔄 Processing ${batch.messages.length} queue messages`);
     
     for (const message of batch.messages) {
       try {
-        console.log(`Processing message: ${message.body.type} for ${message.body.productData?.title || 'unknown product'}`);
-        const result = await handleProductQueueMessage(message.body, env);
+        console.log(`Processing message: ${message.body.type}`);
+        let result;
+        if (message.body.type?.startsWith('CREATE_PRODUCT') || message.body.type?.startsWith('UPDATE_PRODUCT') || message.body.type?.startsWith('ARCHIVE_PRODUCT')) {
+          result = await handleProductQueueMessage(message.body, env);
+        } else if (message.body.type?.startsWith('CREATE_LOCATION') || message.body.type?.startsWith('UPDATE_LOCATION')) {
+          result = await handleLocationQueueMessage(message.body, env);
+        } else if (message.body.type?.startsWith('CREATE_CUSTOMER') || message.body.type?.startsWith('UPDATE_CUSTOMER')) {
+          result = await handleCustomerQueueMessage(message.body, env);
+        } else {
+          console.warn(`Unknown queue message type: ${message.body.type}`);
+          message.ack();
+          continue;
+        }
         
         if (result.success) {
           console.log(`✅ Successfully processed ${message.body.type}`);

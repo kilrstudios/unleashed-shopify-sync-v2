@@ -122,7 +122,8 @@ async function fetchAllStockOnHand(authData) {
 
   console.log(`✅ Retrieved ${allStock.length} StockOnHand rows in bulk`);
 
-  // DEBUG: print each row so we can verify warehouse codes and quantities
+  // DEBUG logging disabled to keep tails under 256 KB
+  /*
   allStock.forEach(item => {
     const prodCode = item.ProductCode || item.Product?.ProductCode || 'UNKNOWN_CODE';
     const whCode = item.WarehouseCode || item.Warehouse?.WarehouseCode || 'UNKNOWN_WH';
@@ -130,12 +131,11 @@ async function fetchAllStockOnHand(authData) {
     const onHand = item.QuantityOnHand ?? item.QtyOnHand ?? 'n/a';
     console.log(`STOCK-ROW ${prodCode} | WH: ${whCode} | Avail: ${avail} | OnHand: ${onHand}`);
 
-    // If we still can't see a warehouse code, dump the raw JSON so we can
-    // discover where Unleashed puts this information.
     if (whCode === 'UNKNOWN_WH') {
       console.log('RAW STOCK JSON', JSON.stringify(item));
     }
   });
+  */
 
   return allStock;
 }
@@ -313,6 +313,16 @@ async function fetchShopifyProducts(baseUrl, headers) {
               width
               height
             }
+            media(first: 50) {
+              edges {
+                node {
+                  ... on MediaImage {
+                    id
+                    image { url originalSrc }
+                  }
+                }
+              }
+            }
             variants(first: 20) {
               edges {
                 node {
@@ -396,6 +406,21 @@ async function fetchShopifyProducts(baseUrl, headers) {
         
         return variant;
       });
+      
+      // Flatten media into an array of {id, url}
+      product.media = (product.media?.edges || []).map(mEdge => ({
+        id: mEdge.node.id,
+        url: mEdge.node.image.url || mEdge.node.image.originalSrc
+      }));
+
+      // DEBUG: list media filenames so we can compare later
+      if (product.media.length) {
+        console.log(`\n🖼️ EXISTING MEDIA for ${product.handle} (${product.id}):`);
+        product.media.forEach(m => {
+          const filename = m.url.split('/').pop().split('?')[0];
+          console.log(`   - ${filename} (${m.id})`);
+        });
+      }
       
       return product;
     });

@@ -174,14 +174,19 @@ function getAttributeValue(attributeSet, attributeName) {
   return attribute ? attribute.Value : null;
 }
 
-function extractVariantOptions(attributeSet) {
-  if (!attributeSet) return { option1: 'Default Title' };
+function extractVariantOptions(attributeSet, fallbackValue) {
+  if (!attributeSet) return { option1: fallbackValue || 'Default Title' };
   
-  return {
-    option1: getAttributeValue(attributeSet, 'Option 1 Value'),
-    option2: getAttributeValue(attributeSet, 'Option 2 Value'),
-    option3: getAttributeValue(attributeSet, 'Option 3 Value')
-  };
+  const opt1 = getAttributeValue(attributeSet, 'Option 1 Value');
+  const opt2 = getAttributeValue(attributeSet, 'Option 2 Value');
+  const opt3 = getAttributeValue(attributeSet, 'Option 3 Value');
+
+  // If *no* option values are present, fall back to a unique identifier (SKU)
+  if (!opt1 && !opt2 && !opt3 && fallbackValue) {
+    return { option1: fallbackValue };
+  }
+
+  return { option1: opt1, option2: opt2, option3: opt3 };
 }
 
 function extractProductOptions(attributeSet) {
@@ -293,10 +298,16 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
         const mainProduct = group[0];
         const isMultiVariant = group.length > 1;
 
+        // Determine product title: prefer explicit "Product Title" attribute, otherwise fall back
+        // to Unleashed ProductDescription, then ProductName, then finally the SKU / code.
+        const productTitle = (
+          getAttributeValue(mainProduct.AttributeSet, 'Product Title')
+          || mainProduct.ProductDescription
+          || mainProduct.ProductName
+          || mainProduct.ProductCode
+        ).toString().trim();
+
         // Generate handle based on grouping strategy
-        const productTitle = isMultiVariant 
-          ? getAttributeValue(mainProduct.AttributeSet, 'Product Title')
-          : mainProduct.ProductDescription;
         const handle = slugify(productTitle);
 
         // Debug: Log handle generation and matching attempt
@@ -318,9 +329,15 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
 
         // Get option names from the first product with AttributeSet
         const productWithOptions = group.find(p => p.AttributeSet && getAttributeValue(p.AttributeSet, 'Option Names'));
-        const optionNames = productWithOptions ? 
+        let optionNames = productWithOptions ? 
           parseOptionNames(getAttributeValue(productWithOptions.AttributeSet, 'Option Names')) :
           [];
+
+        // If the group is multi-variant but Unleashed has not defined option names, we
+        // fall back to a single option "SKU" so each variant can be distinguished.
+        if (isMultiVariant && optionNames.length === 0) {
+          optionNames = ['SKU'];
+        }
 
         // Prepare product data
         const productData = {
@@ -338,32 +355,40 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
             const temp = group.reduce((allImages, product) => {
               // 1. Unleashed Images array (preferred)
               if (product.Images && product.Images.length > 0) {
-                allImages.push(...product.Images.map(img => ({
-                  src: img.Url,
-                  alt: `Image for ${product.ProductCode}`
-                })));
+                // Prefer the image marked as IsDefault=true, fallback to the first image in the array.
+                const primary = product.Images.find(img => img.IsDefault) || product.Images[0];
+                if (primary && primary.Url) {
+                  allImages.push({
+                    src: primary.Url,
+                    alt: `Image for ${product.ProductCode}`,
+                    variantSkus: [product.ProductCode]
+                  });
+                }
               }
 
               // 2. Fallback to ImageUrl field on the product
               if (product.ImageUrl) {
                 allImages.push({
                   src: product.ImageUrl,
-                  alt: `Image for ${product.ProductCode}`
+                  alt: `Image for ${product.ProductCode}`,
+                  variantSkus: [product.ProductCode]
                 });
               }
 
               // 3. Legacy Attachments array (if ever used)
               if (product.Attachments && product.Attachments.length > 0) {
-                allImages.push(...product.Attachments.map(att => ({
-                  src: att.DownloadUrl || att.Url,
-                  alt: att.Description || `Image for ${product.ProductCode}`
-                })));
+                const primaryAtt = product.Attachments[0];
+                allImages.push({
+                  src: primaryAtt.DownloadUrl || primaryAtt.Url,
+                  alt: primaryAtt.Description || `Image for ${product.ProductCode}`,
+                  variantSkus: [product.ProductCode]
+                });
               }
 
               return allImages;
             }, []);
 
-            // Deduplicate by canonical key
+            // Deduplicate by canonical key, merging variantSkus sets
             const baseKey = (url) => {
               if (!url) return '';
               try {
@@ -374,127 +399,124 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
               }
             };
 
-            const seen = new Set();
-            const unique = [];
+            const mapByKey = new Map();
             temp.forEach(img => {
               const key = baseKey(img.src);
-              if (!seen.has(key)) {
-                seen.add(key);
-                unique.push(img);
+              if (!mapByKey.has(key)) {
+                mapByKey.set(key, { ...img, variantSkus: new Set(img.variantSkus || []) });
+              } else {
+                const existing = mapByKey.get(key);
+                (img.variantSkus || []).forEach(sku => existing.variantSkus.add(sku));
               }
             });
-            return unique;
+
+            // Convert Sets back to arrays for output
+            const finalImgs = Array.from(mapByKey.values()).map(img => ({
+              src: img.src,
+              alt: img.alt,
+              variantSkus: Array.from(img.variantSkus)
+            }));
+
+            // DEBUG: list deduplicated image filenames for this product group
+            if (finalImgs.length) {
+              console.log(`\n🖼️ UNLEASHED IMAGES for group "${productTitle}" (${handle}):`);
+              finalImgs.forEach(i => {
+                const fn = (i.src || '').split('/').pop().split('?')[0];
+                console.log(`   - ${fn} → variants ${i.variantSkus.join(', ')}`);
+              });
+            }
+
+            return finalImgs;
           })(),
           options: isMultiVariant ? 
             optionNames.map(name => ({ name })) :
             [{ name: 'Title' }],
-          variants: group.map(product => {
-            const variantOptions = extractVariantOptions(product.AttributeSet);
-            
-            // Calculate inventory quantities for each location
-            const inventoryQuantities = [];
-            if (product.StockOnHand && product.StockOnHand.length > 0) {
-              product.StockOnHand.forEach(stock => {
-                // Prefer explicit warehouse code, otherwise fall back to the tenant-wide default
-                let warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
-                if (!warehouseCode || warehouseCode.trim() === '') {
-                  warehouseCode = defaultWarehouseCode;
-                  if (!warehouseCode) {
-                    console.warn(`⚠️ Stock row for ${product.ProductCode} has no warehouse; default not supplied – skipping`);
-                    return;
+          variants: (() => {
+            const variantsMap = new Map();
+
+            group.forEach(product => {
+              const variantOptions = extractVariantOptions(product.AttributeSet, product.ProductCode);
+
+              // Build a composite key from option values (undefined treated as '')
+              const vKey = [variantOptions.option1 || '', variantOptions.option2 || '', variantOptions.option3 || ''].join('|');
+
+              // Calculate inventory quantities for this product row
+              const inventoryQuantities = [];
+              if (product.StockOnHand && product.StockOnHand.length > 0) {
+                product.StockOnHand.forEach(stock => {
+                  let warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
+                  if (!warehouseCode || warehouseCode.trim() === '') {
+                    warehouseCode = defaultWarehouseCode;
+                    if (!warehouseCode) return; // skip if still unknown
                   }
-                  console.log(`   ↪️  Falling back to default warehouse "${warehouseCode}"`);
-                }
 
-                // DEBUG: log raw stock row before location match
-                console.log(
-                  'INV MAP raw →',
-                  product.ProductCode,
-                  '| WH:', warehouseCode,
-                  '| Avail:', stock.QuantityAvailable ?? stock.QtyAvailable ?? stock.AvailableQty,
-                  '| OnHand:', stock.QuantityOnHand ?? stock.QtyOnHand
-                );
+                  let matchingLocation = shopifyLocations.find(loc => loc?.metafields?.["custom.warehouse_code"] === warehouseCode);
+                  if (!matchingLocation && shopifyLocations.length > 0) matchingLocation = shopifyLocations[0];
 
-                let matchingLocation = shopifyLocations.find(loc => {
-                  return (
-                    loc?.metafields?.["custom.warehouse_code"] &&
-                    loc.metafields["custom.warehouse_code"] === warehouseCode
+                  const qty = parseInt(
+                    stock.QuantityAvailable ?? stock.QtyAvailable ?? stock.AvailableQty ??
+                    stock.QuantityOnHand ?? stock.QtyOnHand ?? 0
                   );
+
+                  inventoryQuantities.push({
+                    locationId: matchingLocation.id,
+                    name: "available",
+                    quantity: isNaN(qty) ? 0 : qty
+                  });
                 });
+              }
 
-                if (!matchingLocation && shopifyLocations.length > 0) {
-                  console.warn(`⚠️ No Shopify location for warehouse_code "${warehouseCode}" – using primary location ${shopifyLocations[0].name}`);
-                  matchingLocation = shopifyLocations[0];
-                }
-
-                // Determine available quantity, supporting multiple possible field names from Unleashed
-                const qty = parseInt(
-                  stock.QuantityAvailable ??
-                  stock.QtyAvailable ?? // NEW – some tenants use this field name
-                  stock.AvailableQty ??
-                  stock.QuantityOnHand ??
-                  stock.QtyOnHand ??
-                  0
-                );
-
-                // Debug: log how each warehouse row maps to a Shopify location & quantity
-                console.log(
-                  'INV MAP',
-                  product.ProductCode,
-                  '| Warehouse', warehouseCode,
-                  '→', matchingLocation ? matchingLocation.id : 'NO-MATCH',
-                  '| qty', qty
-                );
-
-                inventoryQuantities.push({
-                  locationId: matchingLocation.id,
-                  name: "available",
-                  quantity: isNaN(qty) ? 0 : qty
-                });
-              });
-            }
-            
-            return {
-              sku: product.ProductCode,
-              title: isMultiVariant 
-                ? generateVariantTitle(product.AttributeSet)
-                : 'Default Title',
-              price: product.DefaultSellPrice,
-              compare_at_price: null,
-              weight: product.Weight || 0,
-              weight_unit: 'KILOGRAMS',
-              inventory_management: product.IsSellable ? 'shopify' : null,
-              inventoryItem: {
-                tracked: product.IsSellable,
-                measurement: {
-                  weight: {
-                    value: parseFloat(product.Weight) || 0,
-                    unit: 'KILOGRAMS'
+              if (variantsMap.has(vKey)) {
+                // Merge inventories into existing variant entry
+                const existing = variantsMap.get(vKey);
+                inventoryQuantities.forEach(newRow => {
+                  const match = existing.inventoryQuantities.find(r => r.locationId === newRow.locationId);
+                  if (match) {
+                    match.quantity += newRow.quantity; // accumulate
+                  } else {
+                    existing.inventoryQuantities.push({ ...newRow });
                   }
-                }
-              },
-              inventoryQuantities: inventoryQuantities,
-              // Alias for compatibility with productSet builder
-              inventory_levels: inventoryQuantities,
-              option1: variantOptions.option1,
-              option2: variantOptions.option2,
-              option3: variantOptions.option3,
-              // Build up to 10 price-tier metafields.
-              // Shopify expects a plain numeric string for `money` type, so we pass the amount only.
-              // Any tier that is blank, non-numeric or zero is skipped entirely.
-              metafields: Array.from({ length: 10 }, (_, i) => {
-                const rawVal = product[`SellPriceTier${i + 1}`]?.Value;
-                const num = rawVal === undefined || rawVal === null ? NaN : parseFloat(rawVal);
-                if (isNaN(num) || num === 0) return null; // skip empty tiers
-                return {
-                namespace: 'custom',
-                key: `price_tier_${i + 1}`,
-                  value: String(num),
-                type: 'money'
-                };
-              }).filter(Boolean)
-            };
-          })
+                });
+              } else {
+                variantsMap.set(vKey, {
+                  sku: product.ProductCode,
+                  title: isMultiVariant ? generateVariantTitle(product.AttributeSet) : 'Default Title',
+                  price: product.DefaultSellPrice,
+                  compare_at_price: null,
+                  weight: product.Weight || 0,
+                  weight_unit: 'KILOGRAMS',
+                  inventory_management: product.IsSellable ? 'shopify' : null,
+                  inventoryItem: {
+                    tracked: product.IsSellable,
+                    measurement: {
+                      weight: {
+                        value: parseFloat(product.Weight) || 0,
+                        unit: 'KILOGRAMS'
+                      }
+                    }
+                  },
+                  inventoryQuantities: inventoryQuantities,
+                  inventory_levels: inventoryQuantities, // alias
+                  option1: variantOptions.option1 || product.ProductCode,
+                  option2: variantOptions.option2,
+                  option3: variantOptions.option3,
+                  metafields: Array.from({ length: 10 }, (_, i) => {
+                    const rawVal = product[`SellPriceTier${i + 1}`]?.Value;
+                    const num = rawVal === undefined || rawVal === null ? NaN : parseFloat(rawVal);
+                    if (isNaN(num) || num === 0) return null;
+                    return {
+                      namespace: 'custom',
+                      key: `price_tier_${i + 1}`,
+                      value: String(num),
+                      type: 'money'
+                    };
+                  }).filter(Boolean)
+                });
+              }
+            });
+
+            return Array.from(variantsMap.values());
+          })()
         };
 
         if (matchingProduct) {

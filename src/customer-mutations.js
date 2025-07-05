@@ -334,8 +334,98 @@ async function mutateCustomers(authData, mappingResults) {
   }
 }
 
+// === QUEUE-BASED CUSTOMER MUTATIONS ===
+async function mutateCustomersViaQueue(env, shopDomain, mappingResults, originalDomain) {
+  console.log('🚀 Queueing customer mutations via CUSTOMER_QUEUE');
+  const syncId = crypto.randomUUID();
+  const results = {
+    method: 'queue_based',
+    syncId,
+    queued: { creates: 0, updates: 0 },
+    summary: '',
+    errors: []
+  };
+
+  try {
+    for (const cust of mappingResults.toCreate) {
+      await env.CUSTOMER_QUEUE.send({
+        type: 'CREATE_CUSTOMER',
+        syncId,
+        originalDomain,
+        shopDomain,
+        customerData: cust,
+        timestamp: new Date().toISOString()
+      });
+      results.queued.creates++;
+    }
+    for (const cust of mappingResults.toUpdate) {
+      await env.CUSTOMER_QUEUE.send({
+        type: 'UPDATE_CUSTOMER',
+        syncId,
+        originalDomain,
+        shopDomain,
+        customerData: cust,
+        timestamp: new Date().toISOString()
+      });
+      results.queued.updates++;
+    }
+    const total = results.queued.creates + results.queued.updates;
+    results.summary = `Queued ${total} customer operations (${results.queued.creates} creates, ${results.queued.updates} updates)`;
+    console.log(`✅ ${results.summary} – Sync ID: ${syncId}`);
+  } catch (err) {
+    console.error('🚨 Failed to queue customer operations', err);
+    results.errors.push(err.message);
+  }
+  return results;
+}
+
+// Process individual customer queue messages
+async function handleCustomerQueueMessage(message, env) {
+  console.log(`👥 Handling CUSTOMER_QUEUE message: ${message.type}`);
+  try {
+    // Fetch auth
+    const authString = await env.AUTH_STORE.get(message.originalDomain);
+    if (!authString) throw new Error(`Auth not found for domain ${message.originalDomain}`);
+    const authData = JSON.parse(authString);
+    const baseUrl = `https://${message.shopDomain}/admin/api/2025-04`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': authData.shopify.accessToken
+    };
+
+    const cust = message.customerData;
+
+    const buildInput = () => ({
+      firstName: cust.firstName,
+      lastName: cust.lastName,
+      email: cust.email,
+      phone: cust.phone || null,
+      metafields: (cust.metafields || []).map(mf => ({
+        namespace: mf.namespace,
+        key: mf.key,
+        value: mf.value,
+        type: 'single_line_text_field'
+      }))
+    });
+
+    if (message.type === 'CREATE_CUSTOMER') {
+      await executeMutation(baseUrl, headers, CUSTOMER_CREATE_MUTATION, { input: buildInput() });
+    } else if (message.type === 'UPDATE_CUSTOMER') {
+      await executeMutation(baseUrl, headers, CUSTOMER_UPDATE_MUTATION, { input: { id: cust.id, ...buildInput() } });
+    } else {
+      throw new Error(`Unknown customer queue message type: ${message.type}`);
+    }
+    return { success: true };
+  } catch (error) {
+    console.error('🚨 CUSTOMER_QUEUE message failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 export {
   mutateCustomers,
   createCustomersBatch,
-  updateCustomersBatch
+  updateCustomersBatch,
+  mutateCustomersViaQueue,
+  handleCustomerQueueMessage
 }; 

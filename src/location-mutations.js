@@ -362,4 +362,110 @@ async function mutateLocations(authData, mappingResults) {
   return results;
 }
 
-export { mutateLocations };
+// === QUEUE-BASED LOCATION MUTATIONS ===
+async function mutateLocationsViaQueue(env, shopDomain, mappingResults, originalDomain) {
+  console.log('🚀 Queueing location mutations via LOCATION_QUEUE');
+  const syncId = crypto.randomUUID();
+  const results = {
+    method: 'queue_based',
+    syncId,
+    queued: { creates: 0, updates: 0 },
+    summary: '',
+    errors: []
+  };
+
+  try {
+    // Queue creations
+    for (const loc of mappingResults.toCreate) {
+      await env.LOCATION_QUEUE.send({
+        type: 'CREATE_LOCATION',
+        syncId,
+        originalDomain,
+        shopDomain,
+        locationData: loc,
+        timestamp: new Date().toISOString()
+      });
+      results.queued.creates++;
+    }
+
+    // Queue updates
+    for (const loc of mappingResults.toUpdate) {
+      await env.LOCATION_QUEUE.send({
+        type: 'UPDATE_LOCATION',
+        syncId,
+        originalDomain,
+        shopDomain,
+        locationData: loc,
+        timestamp: new Date().toISOString()
+      });
+      results.queued.updates++;
+    }
+
+    const total = results.queued.creates + results.queued.updates;
+    results.summary = `Queued ${total} location operations (${results.queued.creates} creates, ${results.queued.updates} updates)`;
+    console.log(`✅ ${results.summary} – Sync ID: ${syncId}`);
+  } catch (err) {
+    console.error('🚨 Failed to queue location operations', err);
+    results.errors.push(err.message);
+  }
+
+  return results;
+}
+
+// Process an individual queue message (consumer side)
+async function handleLocationQueueMessage(message, env) {
+  console.log(`📍 Handling LOCATION_QUEUE message: ${message.type}`);
+  try {
+    // Retrieve Shopify auth via KV using original domain
+    const authString = await env.AUTH_STORE.get(message.originalDomain);
+    if (!authString) throw new Error(`Auth not found for domain ${message.originalDomain}`);
+    const authData = JSON.parse(authString);
+    const baseUrl = `https://${message.shopDomain}/admin/api/2025-04`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': authData.shopify.accessToken
+    };
+
+    const loc = message.locationData;
+
+    const buildInput = () => {
+      const input = {
+        name: loc.name,
+        address: {
+          address1: loc.address1,
+          address2: loc.address2 || '',
+          city: loc.city,
+          provinceCode: loc.provinceCode,
+          countryCode: loc.countryCode,
+          zip: loc.zip,
+          phone: loc.phone || ''
+        },
+        fulfillsOnlineOrders: true
+      };
+      if (loc.warehouseCode) {
+        input.metafields = [{
+          namespace: 'custom',
+          key: 'warehouse_code',
+          value: loc.warehouseCode,
+          type: 'single_line_text_field'
+        }];
+      }
+      return input;
+    };
+
+    if (message.type === 'CREATE_LOCATION') {
+      await executeMutation(baseUrl, headers, CREATE_LOCATION_MUTATION, { input: buildInput() });
+    } else if (message.type === 'UPDATE_LOCATION') {
+      await executeMutation(baseUrl, headers, UPDATE_LOCATION_MUTATION, { id: loc.id, input: buildInput() });
+    } else {
+      throw new Error(`Unknown location queue message type: ${message.type}`);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('🚨 Failed to process LOCATION_QUEUE message', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export { mutateLocations, mutateLocationsViaQueue, handleLocationQueueMessage };

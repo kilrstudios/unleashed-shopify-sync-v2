@@ -5,7 +5,7 @@
 
 import { pullAllData } from './data_pull.js';
 import { mapLocations } from './location-mapping.js';
-import { mutateLocations } from './location-mutations.js';
+import { mutateLocationsViaQueue } from './location-mutations.js';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -104,9 +104,9 @@ export async function handleLocationMutations(request, env) {
     console.log('🗺️ Starting location mapping for mutations...');
     const locationMappingResults = await mapLocations(data.unleashed.warehouses, data.shopify.locations);
     
-    // Execute location mutations
-    console.log('🔄 Starting location mutations...');
-    const mutationResults = await mutateLocations(authData.shopify, locationMappingResults);
+    // Queue location mutations
+    console.log('📋 Queueing location mutations...');
+    const mutationResults = await mutateLocationsViaQueue(env, authData.shopify.shopDomain, locationMappingResults, domain);
 
     console.log('✅ Location mutations completed successfully');
 
@@ -119,17 +119,7 @@ export async function handleLocationMutations(request, env) {
         errors: locationMappingResults.errors.length,
         processed: locationMappingResults.processed
       },
-      mutationResults: {
-        created: {
-          successful: mutationResults.created.successful.length,
-          failed: mutationResults.created.failed.length
-        },
-        updated: {
-          successful: mutationResults.updated.successful.length,
-          failed: mutationResults.updated.failed.length
-        },
-        summary: mutationResults.summary
-      },
+      queueResults: mutationResults,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -213,7 +203,7 @@ export async function handleLocationSync(request, env) {
     let mutationResults = null;
     if (locationMappingResults.toCreate.length > 0 || locationMappingResults.toUpdate.length > 0) {
       console.log('🚀 Step 3: Executing location mutations...');
-      mutationResults = await mutateLocations(authData.shopify, locationMappingResults);
+      mutationResults = await mutateLocationsViaQueue(env, authData.shopify.shopDomain, locationMappingResults, domain);
       console.log('✅ Location mutations completed successfully');
     } else {
       console.log('⏭️ Step 3: No mutations needed - all locations are up to date');
@@ -246,17 +236,7 @@ export async function handleLocationSync(request, env) {
         processed: locationMappingResults.processed,
         details: locationMappingResults.mappingDetails
       },
-      mutationResults: {
-        created: {
-          successful: mutationResults.created.successful.length,
-          failed: mutationResults.created.failed.length
-        },
-        updated: {
-          successful: mutationResults.updated.successful.length,
-          failed: mutationResults.updated.failed.length
-        },
-        summary: mutationResults.summary
-      },
+      queueResults: mutationResults,
       timestamp: new Date().toISOString()
     });
   } catch (error) {

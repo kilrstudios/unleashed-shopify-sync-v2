@@ -51,6 +51,55 @@ function parseOptionNames(optionNamesStr) {
   return optionNamesStr.split(/[|,]/).map(name => name.trim()).filter(Boolean);
 }
 
+// ---------------------------------------------------------------------------
+// Global variables used by product builders and queue consumer
+// These are populated once per Worker instance when the queue consumer fetches
+// the locations list. buildProductSetInput relies on them being defined.
+// ---------------------------------------------------------------------------
+let shopifyLocations;           // Array of { id, name, ... }
+let firstProductPayloadLogged = false; // Debug flag – log first payload only
+
+// ---------------------------------------------------------------------------
+// Helper: perform Shopify GraphQL request with exponential-backoff retry when
+// the platform responds with THROTTLED errors. This dramatically reduces the
+// chance our Worker crashes a queue batch due to bursty write traffic.
+// ---------------------------------------------------------------------------
+async function shopifyGraphQLWithRetry(url, headers, payload, maxRetries = 5) {
+  let attempt = 0;
+  while (true) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    // Non-200 HTTP? bail unless we can retry safely (Shopify uses 200 even for
+    // GraphQL errors, but handle generic 5xx as well)
+    if (!resp.ok && resp.status >= 500 && attempt < maxRetries) {
+      const wait = Math.min(1000 * Math.pow(2, attempt), 10000);
+      console.warn(`⚠️ HTTP ${resp.status} – retrying in ${wait}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, wait));
+      attempt++;
+      continue;
+    }
+
+    const data = await resp.json();
+
+    // Detect Shopify throttling error in GraphQL error extensions
+    const isThrottled = Array.isArray(data.errors) && data.errors.some(e => e.extensions?.code === 'THROTTLED');
+
+    if (isThrottled && attempt < maxRetries) {
+      const wait = Math.min(1000 * Math.pow(2, attempt), 15000);
+      console.warn(`⏳ Shopify throttled – waiting ${wait}ms then retrying (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, wait));
+      attempt++;
+      continue;
+    }
+
+    return { response: resp, data };
+  }
+}
+
 // Build productSet input for bulk operation
 function buildProductSetInput(productData, isUpdate = false) {
   // Determine if this is a single-variant product with default options only
@@ -119,13 +168,13 @@ function buildProductSetInput(productData, isUpdate = false) {
       // Add inventory quantities for each location (supports both inventory_levels and inventoryQuantities aliases)
       const invLevels = variant.inventory_levels || variant.inventoryQuantities;
       if (invLevels && shopifyLocations) {
-        variantInput.inventoryQuantities = [];
+        const qtyByLocation = new Map(); // locationId(GID) -> summed qty
 
         invLevels.forEach(level => {
           const availableVal = level.available ?? level.quantity;
           if (availableVal === undefined) return;
 
-          // locationId may be stored as location_id (numeric) or locationId (GID)
+          // Find matching Shopify location for this stock row.
           const locMatch = shopifyLocations.find(loc => {
             const locNumeric = extractNumericId(loc.id);
             return (
@@ -136,14 +185,22 @@ function buildProductSetInput(productData, isUpdate = false) {
             );
           });
 
-          if (locMatch) {
-            variantInput.inventoryQuantities.push({
-              locationId: locMatch.id,
-              name: "available",
-              quantity: parseInt(availableVal) || 0
-            });
-          }
+          if (!locMatch) return; // no mapping – skip
+
+          const locId = locMatch.id;
+          const qty = parseInt(availableVal) || 0;
+
+          // Accumulate – if we've already seen this location for the variant,
+          // add the quantities together instead of creating a duplicate entry.
+          qtyByLocation.set(locId, (qtyByLocation.get(locId) || 0) + qty);
         });
+
+        // Build inventoryQuantities array from the collapsed map.
+        variantInput.inventoryQuantities = Array.from(qtyByLocation.entries()).map(([locationId, quantity]) => ({
+          locationId,
+          name: "available",
+          quantity
+        }));
       }
 
       return variantInput;
@@ -512,13 +569,12 @@ async function updateInventoryLevels(baseUrl, headers, inventoryUpdates) {
           }
         };
 
-        const response = await fetch(`${baseUrl}/graphql.json`, {
-          method: 'POST',
+        // Use helper with automatic back-off to avoid Shopify rate-limit errors
+        const { data } = await shopifyGraphQLWithRetry(
+          `${baseUrl}/graphql.json`,
           headers,
-          body: JSON.stringify({ query: mutation, variables })
-        });
-
-        const data = await response.json();
+          { query: mutation, variables }
+        );
         
         const userErrs = data.data.inventorySetQuantities.userErrors;
         if (userErrs && userErrs.length > 0) {
@@ -588,16 +644,12 @@ async function archiveProducts(baseUrl, headers, productsToArchive) {
         }
       };
 
-      const response = await fetch(`${baseUrl}/graphql.json`, {
-        method: 'POST',
+      // Use helper with automatic back-off to avoid Shopify rate-limit errors
+      const { data } = await shopifyGraphQLWithRetry(
+        `${baseUrl}/graphql.json`,
         headers,
-        body: JSON.stringify({
-          query: mutation,
-          variables
-        })
-      });
-
-      const data = await response.json();
+        { query: mutation, variables }
+      );
       
       if (data.errors) {
         throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
@@ -672,31 +724,27 @@ async function mutateProductsIndividually(baseUrl, headers, products, isUpdate =
 
         const variables = buildProductSetInput(product, isUpdate);
         
-        const response = await fetch(`${baseUrl}/graphql.json`, {
-          method: 'POST',
+        // Use helper with automatic back-off to avoid Shopify rate-limit errors
+        const { data } = await shopifyGraphQLWithRetry(
+          `${baseUrl}/graphql.json`,
           headers,
-          body: JSON.stringify({
-            query: mutation,
-            variables
-          })
-        });
-
-        const data = await response.json();
+          { query: mutation, variables }
+        );
         
-        if (data.errors) {
+        if (data.errors && data.errors.length) {
           throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
         }
 
-        if (data.data.productSet.userErrors.length > 0) {
+        if (data.data?.productSet?.userErrors?.length) {
           throw new Error(`Product errors: ${JSON.stringify(data.data.productSet.userErrors)}`);
         }
 
         results.successful.push({
           original: product,
-          result: data.data.productSet.product
+          result: data.data?.productSet?.product
         });
 
-        console.log(`✅ Successfully ${isUpdate ? 'updated' : 'created'} product: "${data.data.productSet.product.title}"`);
+        console.log(`✅ Successfully ${isUpdate ? 'updated' : 'created'} product: "${data.data?.productSet?.product?.title}"`);
 
       } catch (error) {
         console.error(`❌ Failed to ${isUpdate ? 'update' : 'create'} product "${product.title}":`, error.message);
@@ -857,24 +905,8 @@ async function mutateProductsDirect(shopifyAuth, mappingResults) {
 
 // Main function: Decides between comprehensive, queue, and direct methods
 async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null, shopifyLocations = null, useComprehensive = true) {
-  const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
-  
-  // Use comprehensive productSet mutations if locations are available and flag is true
-  if (useComprehensive && shopifyLocations) {
-    console.log(`🚀 Using comprehensive productSet mutations for ${totalOperations} operations...`);
-    return await mutateProductsComprehensive(shopifyAuth, mappingResults, shopifyLocations);
-  }
-  
-  // Decide strategy based on availability and volume
-  const useQueue = env && env.PRODUCT_QUEUE && totalOperations > 5; // Use queue for > 5 operations
-  
-  if (useQueue) {
-    console.log(`📋 Using queue-based mutations for ${totalOperations} operations`);
-    return await mutateProductsViaQueue(env, shopifyAuth, mappingResults, originalDomain);
-  } else {
-    console.log(`🔄 Using direct mutations for ${totalOperations} operations`);
-    return await mutateProductsDirect(shopifyAuth, mappingResults);
-  }
+  // 🔒 Force queue-based product mutations for all operations to avoid sub-request limits
+  return await mutateProductsViaQueue(env, shopifyAuth, mappingResults, originalDomain);
 }
 
 // Queue consumer: Processes individual product mutations
@@ -900,6 +932,34 @@ async function handleProductQueueMessage(message, env) {
       case 'UPDATE_PRODUCT':
         console.log(`🛠️ ${message.type === 'CREATE_PRODUCT' ? 'Creating' : 'Updating'} product: ${message.productData.title}`);
         
+        // --- Ensure we have the Shopify locations list loaded for inventory mapping ---
+        if (!shopifyLocations) {
+          try {
+            const locQuery = `query { locations(first: 250) { edges { node { id name } } } }`;
+            const locResp = await fetch(`${baseUrl}/graphql.json`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ query: locQuery })
+            });
+            const locData = await locResp.json();
+            shopifyLocations = (locData.data?.locations?.edges || []).map(e => e.node);
+            console.log(`📍 Loaded ${shopifyLocations.length} Shopify locations`);
+          } catch (locErr) {
+            console.error('🚨 Failed to load Shopify locations', locErr);
+            shopifyLocations = [];
+          }
+        }
+
+        // ---------------------------------------------------------------
+        // Build mutation payload and log the very first one for debugging
+        // ---------------------------------------------------------------
+        const variables = buildProductSetInput(message.productData, message.type === 'UPDATE_PRODUCT');
+
+        if (!firstProductPayloadLogged) {
+          console.log('📝 First productSet payload:', JSON.stringify(variables).slice(0, 2000));
+          firstProductPayloadLogged = true;
+        }
+
         const mutation = `
           mutation productSet($input: ProductSetInput!) {
             productSet(input: $input) {
@@ -925,25 +985,23 @@ async function handleProductQueueMessage(message, env) {
           }
         `;
 
-        const variables = buildProductSetInput(message.productData, message.type === 'UPDATE_PRODUCT');
-        
-        const response = await fetch(`${baseUrl}/graphql.json`, {
-          method: 'POST',
+        // Execute the mutation
+        // Use helper with automatic back-off to avoid Shopify rate-limit errors
+        const { data } = await shopifyGraphQLWithRetry(
+          `${baseUrl}/graphql.json`,
           headers,
-          body: JSON.stringify({ query: mutation, variables })
-        });
-
-        const data = await response.json();
+          { query: mutation, variables }
+        );
         
-        if (data.errors) {
+        if (data.errors && data.errors.length) {
           throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
         }
 
-        if (data.data.productSet.userErrors.length > 0) {
+        if (data.data?.productSet?.userErrors?.length) {
           throw new Error(`Product errors: ${JSON.stringify(data.data.productSet.userErrors)}`);
         }
 
-        result = data.data.productSet.product;
+        result = data.data?.productSet?.product;
         console.log(`✅ Successfully ${message.type === 'CREATE_PRODUCT' ? 'created' : 'updated'} product: ${result.title}`);
 
         // TODO: Trigger inventory and image callbacks here
@@ -1454,13 +1512,13 @@ function buildComprehensiveProductSetInput(productData, shopifyLocations, isUpda
     // Add inventory quantities for each location (supports both inventory_levels and inventoryQuantities aliases)
     const invLevels = variant.inventory_levels || variant.inventoryQuantities;
     if (invLevels && shopifyLocations) {
-      variantInput.inventoryQuantities = [];
+      const qtyByLocation = new Map(); // locationId(GID) -> summed qty
 
       invLevels.forEach(level => {
         const availableVal = level.available ?? level.quantity;
         if (availableVal === undefined) return;
 
-        // locationId may be stored as location_id (numeric) or locationId (GID)
+        // Find matching Shopify location for this stock row.
         const locMatch = shopifyLocations.find(loc => {
           const locNumeric = extractNumericId(loc.id);
           return (
@@ -1471,14 +1529,22 @@ function buildComprehensiveProductSetInput(productData, shopifyLocations, isUpda
           );
         });
 
-        if (locMatch) {
-          variantInput.inventoryQuantities.push({
-            locationId: locMatch.id,
-            name: "available",
-            quantity: parseInt(availableVal) || 0
-          });
-        }
+        if (!locMatch) return; // no mapping – skip
+
+        const locId = locMatch.id;
+        const qty = parseInt(availableVal) || 0;
+
+        // Accumulate – if we've already seen this location for the variant,
+        // add the quantities together instead of creating a duplicate entry.
+        qtyByLocation.set(locId, (qtyByLocation.get(locId) || 0) + qty);
       });
+
+      // Build inventoryQuantities array from the collapsed map.
+      variantInput.inventoryQuantities = Array.from(qtyByLocation.entries()).map(([locationId, quantity]) => ({
+        locationId,
+        name: "available",
+        quantity
+      }));
     }
 
     // Add metafields for price tiers - matching your exact format
@@ -1519,6 +1585,13 @@ async function executeComprehensiveProductSet(baseUrl, headers, productData, sho
                 title
                 image {
                   id
+                }
+                media(first: 10) {
+                  edges {
+                    node {
+                      ... on MediaImage { id }
+                    }
+                  }
                 }
                 inventoryItem {
                   id
@@ -1768,27 +1841,27 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     const existingImages = await getProductImages(baseUrl, headers, productResult.product.id);
 
     // ------------------------------------------------------
-    // Build variant → image mapping using variant.image.id
-    // (variantIds field on Image was removed from the 2024-10 API).
+    // Build variant → media mapping using variant.media IDs
+    // (Media IDs are required by productVariantDetachMedia / AppendMedia).
     // ------------------------------------------------------
-    const variantImageMap = new Map(); // variantId → Set(imageIds)
+    const variantImageMap = new Map(); // variantId → Set(mediaIds)
 
-    // From variant.image.id (preferred – always available in current API)
     productResult.product.variants.edges.forEach(edge => {
       const vId = edge.node.id;
-      const imgId = edge.node.image?.id;
-      if (imgId) {
-        if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
-        variantImageMap.get(vId).add(imgId);
-      }
-    });
-
-    // Also include legacy mapping if variantIds still present in the image nodes
-    existingImages.forEach(img => {
-      (img.variantIds || []).forEach(vId => {
-        if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
-        variantImageMap.get(vId).add(img.id);
+      // Collect MediaImage IDs attached to this variant
+      (edge.node.media?.edges || []).forEach(mEdge => {
+        const mId = mEdge.node?.id;
+        if (mId) {
+          if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+          variantImageMap.get(vId).add(mId);
+        }
       });
+      // Fallback to deprecated image.id if still present (older uploads)
+      const legacyImgId = edge.node.image?.id;
+      if (legacyImgId) {
+        if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
+        variantImageMap.get(vId).add(legacyImgId);
+      }
     });
 
     // Helper to create a stable key for an image URL (strip CDN params & size suffixes)
@@ -1801,8 +1874,18 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
       return `${stemBase}.${ext}`;
     };
 
+    // NEW helper – canonical GUID (pre-underscore, no extension)
+    const guidOf = (url) => {
+      const file = url.split('/').pop().split('?')[0];
+      return file.split('.')[0].split('_')[0];
+    };
+
+    // Map of guid → image for quick lookup
+    const existingByGuid = new Map(existingImages.map(img => [img.guid || guidOf(img.originalSrc), img]));
     // Map of baseKey → imageId for images already on the product
     const existingByKey = new Map(existingImages.map(img => [baseKey(img.originalSrc), img]));
+    // NEW: Map of imageId → baseKey to allow reverse look-ups (needed for variant checks)
+    const existingById = new Map(existingImages.map(img => [img.id, baseKey(img.originalSrc)]));
 
     // Ensure we only treat each canonical image once even if productData lists it multiple times
     const canonicalSeen = new Set();
@@ -1814,20 +1897,18 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     const imageVariantMappings = []; // {imageId, variantSkus[]}
 
     for (const imageData of productData.images) {
+      const guid = guidOf(imageData.src);
       const key = baseKey(imageData.src);
-      if (canonicalSeen.has(key)) {
-        // We already processed this image URL, just merge its variant SKUs later
-        continue;
-      }
-      canonicalSeen.add(key);
-      const maybeExisting = existingByKey.get(key);
+      if (canonicalSeen.has(guid)) continue;
+      canonicalSeen.add(guid);
+
+      const maybeExisting = existingByGuid.get(guid) || existingByKey.get(key);
       if (maybeExisting) {
-        // Already on product – just ensure variant linkage later
         if (imageData.variantSkus && imageData.variantSkus.length) {
           imageVariantMappings.push({ imageId: maybeExisting.id, variantSkus: imageData.variantSkus, src: imageData.src });
         }
       } else {
-        imagesToUpload.push(imageData);
+        imagesToUpload.push({ ...imageData, guid });
       }
     }
 
@@ -1840,6 +1921,7 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
       // Merge them into existing maps so subsequent logic sees them as present
       uploadedImages.forEach(uImg => {
         existingByKey.set(baseKey(uImg.originalSrc), uImg);
+        existingByGuid.set(uImg.guid, uImg);
       });
     }
 
@@ -1851,9 +1933,9 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
       }
     }
 
-    // ----------------------------------------------
+    // ------------------------------------------------
     // 4. Build final ImageInput list, skipping dupes
-    // ----------------------------------------------
+    // ------------------------------------------------
     // SKU → variantId map
     const variantIdMap = new Map();
     productResult.product.variants.edges.forEach(edge => variantIdMap.set(edge.node.sku, edge.node.id));
@@ -1862,10 +1944,23 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
 
     const sourceMappings = imageVariantMappings.length > 0 ? imageVariantMappings : [];
     sourceMappings.forEach(mapping => {
+      const mappingKey = baseKey(mapping.src || ""); // canonical key for this image
+
+      // Helper: does variant already have *any* media with the same canonical key?
+      const variantHasKey = (vId) => {
+        const idSet = variantImageMap.get(vId);
+        if (!idSet) return false;
+        for (const mId of idSet) {
+          if (existingById.get(mId) === mappingKey) return true;
+        }
+        return false;
+      };
+
       const variantIdsFromSku = (mapping.variantSkus || []).map(sku => variantIdMap.get(sku));
       const variantIds = (mapping.variantIds || []).concat(variantIdsFromSku)
         .filter(Boolean)
-        .filter(vId => !(variantImageMap.get(vId)?.has(mapping.imageId))); // skip if already linked
+        // Skip if variant already linked to an image with the same canonical key
+        .filter(vId => !variantHasKey(vId));
 
       if (variantIds.length) {
         imagesToLink.push({ id: mapping.imageId, variantIds });
@@ -1877,27 +1972,23 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     });
 
     // ------------------------------------------------
-    // 5. Ensure every variant has at least one image
+    // 5. Optionally detach images from variants that should have none
     // ------------------------------------------------
-    const defaultImageId = existingImages[0]?.id || uploadedImages[0]?.id || null;
-    if (defaultImageId) {
-      variantIdMap.forEach((vId) => {
-        if (!variantImageMap.has(vId) || variantImageMap.get(vId).size === 0) {
-          // Variant lacks an image – link the default product image
-          imagesToLink.push({ id: defaultImageId, variantIds: [vId] });
-          if (!variantImageMap.has(vId)) variantImageMap.set(vId, new Set());
-          variantImageMap.get(vId).add(defaultImageId);
+    const variantsWithDesired = new Set();
+    imagesToLink.forEach(({ variantIds }) => variantIds.forEach(id => variantsWithDesired.add(id)));
+
+    const detachMap = new Map();
+    imagesToLink.forEach(({ id, variantIds }) => {
+      variantIds.forEach(vId => {
+        if (!variantsWithDesired.has(vId)) {
+          // variant is not meant to have any images – mark all current ones for detach
+          const currentSet = variantImageMap.get(vId) || new Set();
+          if (currentSet.size) {
+            detachMap.set(vId, new Set([...currentSet]));
+          }
         }
       });
-    }
-
-    // Deduplicate imagesToLink pairs (id+variantIds) – merge variantIds per image
-    const mergeMap = new Map();
-    imagesToLink.forEach(({ id, variantIds }) => {
-      if (!mergeMap.has(id)) mergeMap.set(id, new Set());
-      variantIds.forEach(v => mergeMap.get(id).add(v));
     });
-    const mergedImagesToLink = Array.from(mergeMap.entries()).map(([id, vSet]) => ({ id, variantIds: Array.from(vSet) }));
 
     // ---------------------------------------------
     // 6. Run single productAppendImages call to link
@@ -1906,18 +1997,9 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
 
     console.log(`🔗 Preparing media detach/append for ${imagesToLink.length} image sets ...`);
 
-    // Build detach inputs (remove ANY existing media for the variant if different from desired)
-    const detachInputs = [];
-    imagesToLink.forEach(({ id: desiredId, variantIds }) => {
-      variantIds.forEach(vId => {
-        const currentSet = variantImageMap.get(vId) || new Set();
-        // Detach if the variant currently has other media or the desiredId is not the only one
-        const idsToDetach = Array.from(currentSet).filter(mid => mid !== desiredId);
-        if (idsToDetach.length) {
-          detachInputs.push({ variantId: vId, mediaIds: idsToDetach });
-        }
-      });
-    });
+    // Build detach inputs (one per variant) – Shopify requires each variantId appear only once
+    const detachInputs = Array.from(detachMap.entries())
+      .map(([variantId, idSet]) => ({ variantId, mediaIds: [Array.from(idSet)[0]] }));
 
     if (detachInputs.length) {
       console.log(`🗑️ Detaching existing media from ${detachInputs.length} variant(s) first ...`);
@@ -1951,11 +2033,15 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
     if (imagesToLink.length) {
       console.log(`🔗 Appending media to variants via productVariantAppendMedia ...`);
 
-      // one input per variant/id pair (Shopify limitation)
-      const expanded = [];
-      imagesToLink.forEach(l => {
-        l.variantIds.forEach(vId => expanded.push({ variantId: vId, mediaIds: [l.id] }));
+      // Build append inputs with UNIQUE variantId (Shopify requirement).
+      const appendMap = new Map(); // variantId → mediaId (choose first)
+      imagesToLink.forEach(({ id, variantIds }) => {
+        variantIds.forEach(vId => {
+          if (!appendMap.has(vId)) appendMap.set(vId, id);
+        });
       });
+
+      const expanded = Array.from(appendMap.entries()).map(([variantId, mediaId]) => ({ variantId, mediaIds: [mediaId] }));
 
       const appendMutation = `
         mutation ProductVariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
@@ -1988,11 +2074,44 @@ async function handleVariantImages(baseUrl, headers, productResult, productData)
       console.log('⚠️ No images require linking');
     }
 
+    // -------- Duplicate cleanup --------
+    // Build desired GUID set once
+    const desiredGuidSet = new Set(productData.images.map(img => guidOf(img.src)));
+
+    const deleteIds = existingImages
+      .filter(img => !desiredGuidSet.has(img.guid || guidOf(img.originalSrc)))
+      .map(img => img.id)
+      .filter(id => !uploadedImages.some(u => u.id === id));
+
+    if (deleteIds.length) {
+      console.log(`🗑️ Deleting ${deleteIds.length} obsolete media images ...`);
+      const delMutation = `
+        mutation mediaDelete($mediaIds: [ID!]!) {
+          mediaDelete(mediaIds: $mediaIds) {
+            deletedMediaIds
+            userErrors { field message }
+          }
+        }
+      `;
+      const delRes = await fetch(`${baseUrl}/graphql.json`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query: delMutation, variables: { mediaIds: deleteIds } })
+      });
+      const delJson = await delRes.json();
+      if (delJson.errors || delJson.data?.mediaDelete?.userErrors?.length) {
+        console.warn('⚠️ Media delete errors:', delJson.errors || delJson.data.mediaDelete.userErrors);
+      } else {
+        console.log(`✅ Removed ${delJson.data.mediaDelete.deletedMediaIds.length} obsolete images`);
+      }
+    }
+    // -------- end cleanup --------
+
     return {
       success: true,
       uploadedImages: uploadedImages.length,
-      linkedImages: mergedImagesToLink.reduce((sum, img) => sum + img.variantIds.length, 0),
-      message: `Uploaded ${uploadedImages.length}, linked to ${mergedImagesToLink.length} images/sets`
+      linkedImages: imagesToLink.length,
+      message: `Uploaded ${uploadedImages.length}, linked to ${imagesToLink.length} images/sets`
     };
 
   } catch (error) {
@@ -2006,11 +2125,17 @@ async function getProductImages(baseUrl, headers, productId) {
   const query = `
     query getProductImages($productId: ID!) {
       product(id: $productId) {
-        images(first: 50) {
+        media(first: 50) {
           edges {
             node {
-              id
-              originalSrc
+              ... on MediaImage {
+                id
+                image {
+                  url
+                  originalSrc
+                }
+                metafield(namespace: "unleashed", key: "image_guid") { value }
+              }
             }
           }
         }
@@ -2033,14 +2158,46 @@ async function getProductImages(baseUrl, headers, productId) {
     throw new Error(`Failed to get product images: ${JSON.stringify(result.errors)}`);
   }
 
-  return result.data.product.images.edges.map(edge => edge.node);
+  // Map the MediaImage nodes to a simpler {id, originalSrc, guid} shape
+  return result.data.product.media.edges.map(edge => ({
+    id: edge.node.id,
+    originalSrc: edge.node.image.url || edge.node.image.originalSrc,
+    guid: (edge.node.metafield?.value) || (() => {
+      const f = (edge.node.image.url || edge.node.image.originalSrc || '').split('/').pop().split('?')[0];
+      return f.split('.')[0].split('_')[0];
+    })()
+  }));
 }
 
 // Upload new images to product
 async function uploadProductImages(baseUrl, headers, productId, imagesToUpload) {
   const uploaded = [];
 
+  // Helper: wait until a MediaImage is READY before we try to use it
+  const waitForMediaReady = async (mediaId, maxAttempts = 12, delayMs = 1000) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const statusQuery = `
+        query ($id: ID!) { node(id: $id) { ... on MediaImage { status } } }
+      `;
+      const res = await fetch(`${baseUrl}/graphql.json`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query: statusQuery, variables: { id: mediaId } })
+      });
+      const js = await res.json();
+      const status = js.data?.node?.status || 'READY';
+      if (status === 'READY') return true;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+    return false;
+  };
+
   for (const img of imagesToUpload) {
+    const guid = img.guid || (() => {
+      const file = img.src.split('/').pop().split('?')[0];
+      return file.split('.')[0].split('_')[0];
+    })();
+
     const mutation = `
       mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
         productCreateMedia(productId: $productId, media: $media) {
@@ -2049,6 +2206,7 @@ async function uploadProductImages(baseUrl, headers, productId, imagesToUpload) 
               id
               image {
                 id
+                url
                 originalSrc
               }
             }
@@ -2090,7 +2248,47 @@ async function uploadProductImages(baseUrl, headers, productId, imagesToUpload) 
       throw new Error(`Image upload errors: ${JSON.stringify(userErrors)}`);
     }
 
-    uploaded.push(creation.media[0].image || { id: creation.media[0].id, originalSrc: img.src });
+    const uploadedNode = creation.media[0].image || { id: creation.media[0].id, originalSrc: img.src };
+    uploaded.push({
+      id: uploadedNode.id,
+      originalSrc: uploadedNode.url || uploadedNode.originalSrc || img.src,
+      guid
+    });
+
+    // Wait until Shopify marks the media READY
+    await waitForMediaReady(uploadedNode.id);
+
+    // ➕ Attach GUID metafield
+    try {
+      const metaMutation = `
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id }
+            userErrors { field message }
+          }
+        }
+      `;
+      const metaVars = {
+        metafields: [{
+          ownerId: uploadedNode.id,
+          namespace: "unleashed",
+          key: "image_guid",
+          type: "single_line_text_field",
+          value: guid
+        }]
+      };
+      const metaRes = await fetch(`${baseUrl}/graphql.json`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query: metaMutation, variables: metaVars })
+      });
+      const metaJson = await metaRes.json();
+      if (metaJson.errors || metaJson.data?.metafieldsSet?.userErrors?.length) {
+        console.warn('⚠️ Metafield set errors for image', guid, metaJson.errors || metaJson.data.metafieldsSet.userErrors);
+      }
+    } catch (e) {
+      console.warn('⚠️ Failed to set image GUID metafield:', e.message);
+    }
   }
 
   console.log(`✅ Uploaded ${uploaded.length} images`);

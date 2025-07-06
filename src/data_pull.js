@@ -1131,10 +1131,10 @@ async function pullAllData(domain, env) {
     throw new Error('Invalid authentication data structure');
   }
 
-  // Fetch data from both systems
+  // Fetch data from both systems using paginated queries for faster response
   const [unleashedData, shopifyData] = await Promise.all([
     fetchUnleashedData(authData.unleashed),
-    fetchShopifyDataBulk(authData.shopify)
+    fetchShopifyDataBulk(authData.shopify, false) // Use paginated queries, not bulk
   ]);
 
   return {

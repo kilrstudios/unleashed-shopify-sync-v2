@@ -10,7 +10,7 @@ import { mapCustomers } from './customer-mapping.js';
 import { mapProducts } from './product-mapping.js';
 import { mutateLocationsViaQueue } from './location-mutations.js';
 import { mutateCustomersViaQueue } from './customer-mutations.js';
-import { mutateProducts } from './product-mutations.js';
+import { mutateProductsViaQueue } from './product-mutations.js';
 
 // Helper function to get auth data from KV store
 async function getAuthData(env, domain) {
@@ -251,9 +251,9 @@ export async function handleComprehensiveSync(request, env) {
           defaultWarehouseCode
         );
         
-        // Execute product mutations (using comprehensive productSet approach)
-        console.log('🔄 Step 4b: Executing product mutations...');
-        const productMutationResults = await mutateProducts(authData.shopify, productMappingResults, env, domain, data.shopify.locations, true);
+        // Execute product mutations (using queue-based approach)
+        console.log('🔄 Step 4b: Executing product mutations via queue...');
+        const productMutationResults = await mutateProductsViaQueue(env, authData.shopify, productMappingResults, domain);
 
         results.steps.productSync = {
           success: true,
@@ -267,55 +267,9 @@ export async function handleComprehensiveSync(request, env) {
             processed: productMappingResults.processed
           },
           mutations: {
-            method: productMutationResults.method || 'comprehensive',
-            ...(productMutationResults.method === 'queue_based' ? {
-              // Queue-based response structure
-              syncId: productMutationResults.syncId,
-              queued: {
-                creates: productMutationResults.queued.creates,
-                updates: productMutationResults.queued.updates,
-                archives: productMutationResults.queued.archives
-              }
-            } : productMutationResults.method === 'comprehensive' || !productMutationResults.method ? {
-              // Comprehensive response structure
-              created: {
-                successful: productMutationResults.created?.successful?.length || 0,
-                failed: productMutationResults.created?.failed?.length || 0
-              },
-              updated: {
-                successful: productMutationResults.updated?.successful?.length || 0,
-                failed: productMutationResults.updated?.failed?.length || 0
-              },
-              archived: {
-                successful: productMutationResults.archived?.successful?.length || 0,
-                failed: productMutationResults.archived?.failed?.length || 0
-              }
-            } : {
-              // Direct response structure (legacy)
-              bulkOperation: {
-                success: productMutationResults.bulkOperation?.success || false,
-                operationId: productMutationResults.bulkOperation?.operation?.id || null,
-                error: productMutationResults.bulkOperation?.error || null
-              },
-              created: {
-                successful: productMutationResults.created?.successful?.length || 0,
-                failed: productMutationResults.created?.failed?.length || 0
-              },
-              updated: {
-                successful: productMutationResults.updated?.successful?.length || 0,
-                failed: productMutationResults.updated?.failed?.length || 0
-              },
-              archived: {
-                successful: productMutationResults.archived?.successful?.length || 0,
-                failed: productMutationResults.archived?.failed?.length || 0
-              },
-              inventory: {
-                successful: productMutationResults.inventory?.successful?.length || 0,
-                failed: productMutationResults.inventory?.failed?.length || 0
-              }
-            }),
-            summary: productMutationResults.summary,
-            errors: productMutationResults.errors || []
+            method: productMutationResults.method,
+            queued: productMutationResults.queued,
+            summary: productMutationResults.summary
           }
         };
         

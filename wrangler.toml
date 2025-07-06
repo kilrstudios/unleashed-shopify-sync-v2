@@ -6,32 +6,24 @@ compatibility_date = "2024-01-01"
 binding = "AUTH_STORE"
 id = "f561e9dfc8774ea4bb5fc9a877bbb8c4" 
 
+# Queue producers for sending mutations to the mutation worker
+# This worker only produces queue messages, doesn't consume them
+
 # Queue for product mutations
 [[queues.producers]]
 queue = "product-mutations"
 binding = "PRODUCT_QUEUE"
-
-[[queues.consumers]]
-queue = "product-mutations"
-max_batch_size = 1
-max_batch_timeout = 30 
 
 # Queue for location mutations
 [[queues.producers]]
 queue = "location-mutations"
 binding = "LOCATION_QUEUE"
 
-[[queues.consumers]]
-queue = "location-mutations"
-max_batch_size = 10
-max_batch_timeout = 30
-
 # Queue for customer mutations
 [[queues.producers]]
 queue = "customer-mutations"
 binding = "CUSTOMER_QUEUE"
 
-[[queues.consumers]]
-queue = "customer-mutations"
-max_batch_size = 10
-max_batch_timeout = 30 
+# Environment variables for logging
+[vars]
+LOG_LEVEL = "info" 

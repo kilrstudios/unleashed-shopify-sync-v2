@@ -271,9 +271,27 @@ async function updateCustomersBatch(baseUrl, headers, customersToUpdate) {
 /**
  * Main function to execute customer mutations
  */
-async function mutateCustomers(authData, mappingResults) {
+// Main function: Decides between bulk operations and individual batch processing
+async function mutateCustomers(authData, mappingResults, useBulk = true) {
+  const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length;
+  
+  console.log(`📊 Customer mutations strategy: ${totalOperations} total operations`);
+  
+  // Use bulk operations for large datasets (recommended for 10+ operations)
+  if (useBulk && totalOperations >= 10) {
+    console.log(`🚀 Using bulk operations for ${totalOperations} customer operations`);
+    return await mutateCustomersBulk(authData, mappingResults);
+  }
+  
+  // Use individual batch processing for smaller datasets or when bulk is disabled
+  console.log(`🔄 Using individual batch processing for ${totalOperations} customer operations`);
+  return await mutateCustomersIndividual(authData, mappingResults);
+}
+
+// Individual customer mutations (original implementation)
+async function mutateCustomersIndividual(authData, mappingResults) {
   try {
-    console.log('🔄 Starting customer mutations...');
+    console.log('🔄 Starting individual customer mutations...');
     console.log(`📊 Mutation summary: ${mappingResults.toCreate.length} to create, ${mappingResults.toUpdate.length} to update`);
 
     // Prepare the base URL and headers (using same pattern as working location mutations)
@@ -422,10 +440,415 @@ async function handleCustomerQueueMessage(message, env) {
   }
 }
 
+// Create JSONL content for bulk customer operations
+function createCustomerBulkOperationJsonl(customersToCreate, customersToUpdate) {
+  const lines = [];
+  
+  // Add creates
+  customersToCreate.forEach(customer => {
+    const customerInput = {
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      email: customer.email,
+      phone: customer.phone || null,
+      metafields: customer.metafields.map(metafield => ({
+        namespace: metafield.namespace || 'unleashed',
+        key: metafield.key,
+        value: metafield.value,
+        type: "single_line_text_field"
+      }))
+    };
+    const jsonLine = JSON.stringify({ input: customerInput });
+    lines.push(jsonLine);
+  });
+
+  // Add updates
+  customersToUpdate.forEach(customer => {
+    const customerInput = {
+      id: customer.id, // Required for updates
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      email: customer.email,
+      phone: customer.phone || null,
+      metafields: customer.metafields.map(metafield => ({
+        namespace: metafield.namespace || 'unleashed',
+        key: metafield.key,
+        value: metafield.value,
+        type: "single_line_text_field"
+      }))
+    };
+    const jsonLine = JSON.stringify({ input: customerInput });
+    lines.push(jsonLine);
+  });
+
+  return lines.join('\n');
+}
+
+// Upload JSONL to Shopify's staged upload for customers
+async function uploadCustomerJsonlFile(baseUrl, headers, jsonlContent) {
+  // First, get a staged upload URL
+  const stagedUploadMutation = `
+    mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters {
+            name
+            value
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const stagedUploadVariables = {
+    input: [{
+      resource: 'BULK_MUTATION_VARIABLES',
+      filename: 'bulk_customer_operations.jsonl',
+      mimeType: 'text/plain',
+      httpMethod: 'POST'
+    }]
+  };
+
+  console.log('📤 Requesting staged upload URL for customers...');
+  const stagedResponse = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query: stagedUploadMutation,
+      variables: stagedUploadVariables
+    })
+  });
+
+  const stagedData = await stagedResponse.json();
+  if (stagedData.errors) {
+    throw new Error(`Customer staged upload request failed: ${JSON.stringify(stagedData.errors)}`);
+  }
+
+  const stagedTarget = stagedData.data.stagedUploadsCreate.stagedTargets[0];
+  if (!stagedTarget) {
+    throw new Error('No staged upload target received for customers');
+  }
+
+  console.log('📤 Uploading customer JSONL file to staged URL...');
+  
+  // Prepare form data for upload
+  const formData = new FormData();
+  
+  // Add parameters from Shopify
+  stagedTarget.parameters.forEach(param => {
+    formData.append(param.name, param.value);
+  });
+  
+  // Add the file content
+  const blob = new Blob([jsonlContent], { type: 'text/plain' });
+  formData.append('file', blob, 'bulk_customer_operations.jsonl');
+
+  const uploadResponse = await fetch(stagedTarget.url, {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error(`Customer file upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+  }
+
+  console.log('✅ Customer JSONL file uploaded successfully');
+  return stagedTarget.resourceUrl;
+}
+
+// Start bulk customer operation
+async function startCustomerBulkOperation(baseUrl, headers, stagedUploadUrl) {
+  const bulkMutation = `
+    mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
+      bulkOperationRunMutation(mutation: $mutation, stagedUploadPath: $stagedUploadPath) {
+        bulkOperation {
+          id
+          status
+          createdAt
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const customerCreateMutation = `
+    mutation customerCreate($input: CustomerInput!) {
+      customerCreate(input: $input) {
+        customer {
+          id
+          firstName
+          lastName
+          email
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  console.log('🚀 Starting customer bulk operation...');
+  const response = await fetch(`${baseUrl}/graphql.json`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query: bulkMutation,
+      variables: {
+        mutation: customerCreateMutation,
+        stagedUploadPath: stagedUploadUrl
+      }
+    })
+  });
+
+  const data = await response.json();
+  if (data.errors) {
+    throw new Error(`Customer bulk operation start failed: ${JSON.stringify(data.errors)}`);
+  }
+
+  if (data.data.bulkOperationRunMutation.userErrors.length > 0) {
+    throw new Error(`Customer bulk operation errors: ${JSON.stringify(data.data.bulkOperationRunMutation.userErrors)}`);
+  }
+
+  const bulkOperation = data.data.bulkOperationRunMutation.bulkOperation;
+  console.log(`✅ Customer bulk operation started: ${bulkOperation.id}`);
+  
+  return bulkOperation;
+}
+
+// Monitor bulk operation status (reuse from products)
+async function monitorCustomerBulkOperation(baseUrl, headers, operationId, maxWaitTime = 300000) { // 5 minutes max
+  const statusQuery = `
+    query {
+      currentBulkOperation {
+        id
+        status
+        errorCode
+        createdAt
+        completedAt
+        objectCount
+        fileSize
+        url
+        partialDataUrl
+      }
+    }
+  `;
+
+  const startTime = Date.now();
+  let lastStatus = null;
+
+  console.log(`⏳ Monitoring customer bulk operation ${operationId}...`);
+
+  while (Date.now() - startTime < maxWaitTime) {
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds between checks
+
+    const response = await fetch(`${baseUrl}/graphql.json`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query: statusQuery })
+    });
+
+    const data = await response.json();
+    if (data.errors) {
+      console.error('Error checking customer bulk operation status:', data.errors);
+      continue;
+    }
+
+    const operation = data.data.currentBulkOperation;
+    if (!operation || operation.id !== operationId) {
+      console.log('No current customer bulk operation or different operation running');
+      continue;
+    }
+
+    if (operation.status !== lastStatus) {
+      console.log(`📊 Customer bulk operation status: ${operation.status} (${operation.objectCount || 0} objects processed)`);
+      lastStatus = operation.status;
+    }
+
+    if (operation.status === 'COMPLETED') {
+      console.log('✅ Customer bulk operation completed successfully');
+      return {
+        success: true,
+        operation,
+        resultUrl: operation.url
+      };
+    }
+
+    if (operation.status === 'FAILED' || operation.status === 'CANCELED') {
+      console.error(`❌ Customer bulk operation ${operation.status.toLowerCase()}: ${operation.errorCode || 'Unknown error'}`);
+      return {
+        success: false,
+        operation,
+        error: operation.errorCode || `Operation ${operation.status.toLowerCase()}`
+      };
+    }
+  }
+
+  console.error('⏰ Customer bulk operation timed out');
+  return {
+    success: false,
+    error: 'Operation timed out',
+    operation: null
+  };
+}
+
+// Download and parse customer bulk operation results
+async function parseCustomerBulkOperationResults(resultUrl) {
+  if (!resultUrl) {
+    console.log('No customer result URL provided - bulk operation may have had no results');
+    return [];
+  }
+
+  try {
+    console.log('📥 Downloading customer bulk operation results...');
+    const response = await fetch(resultUrl);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to download customer results: ${response.status} ${response.statusText}`);
+    }
+
+    const jsonlContent = await response.text();
+    const lines = jsonlContent.trim().split('\n').filter(line => line.trim());
+    
+    console.log(`📊 Processing ${lines.length} customer result lines...`);
+    
+    const results = lines.map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        console.error('Error parsing customer result line:', line, error);
+        return null;
+      }
+    }).filter(Boolean);
+
+    return results;
+  } catch (error) {
+    console.error('Error parsing customer bulk operation results:', error);
+    return [];
+  }
+}
+
+// Bulk customer mutations (primary method for large datasets)
+async function mutateCustomersBulk(shopifyAuth, mappingResults) {
+  console.log('🚀 === STARTING BULK CUSTOMER MUTATIONS ===');
+  
+  const { accessToken, shopDomain } = shopifyAuth;
+  const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+  console.log(`🔗 Using Shopify API base URL: ${baseUrl}`);
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': accessToken
+  };
+
+  const results = {
+    method: 'bulk_operation',
+    bulkOperation: { success: false, operation: null, error: null },
+    created: { successful: [], failed: [] },
+    updated: { successful: [], failed: [] },
+    summary: '',
+    errors: []
+  };
+
+  try {
+    const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length;
+    
+    if (totalOperations === 0) {
+      console.log('📭 No customer operations to process');
+      results.summary = 'No operations to process';
+      return results;
+    }
+
+    console.log(`📊 Customer bulk operation summary: ${mappingResults.toCreate.length} creates, ${mappingResults.toUpdate.length} updates (${totalOperations} total)`);
+
+    // Step 1: Create JSONL content for bulk operation
+    console.log('📝 Creating customer JSONL content for bulk operation...');
+    const jsonlContent = createCustomerBulkOperationJsonl(mappingResults.toCreate, mappingResults.toUpdate);
+    
+    if (!jsonlContent || jsonlContent.trim() === '') {
+      console.log('📭 No customer creates/updates to process via bulk operation');
+      results.summary = 'No operations to process';
+      return results;
+    }
+
+    console.log(`📄 Customer JSONL content created: ${jsonlContent.split('\n').length} operations`);
+
+    // Step 2: Upload JSONL file to staged upload
+    const stagedUploadUrl = await uploadCustomerJsonlFile(baseUrl, headers, jsonlContent);
+
+    // Step 3: Start bulk operation
+    const bulkOperation = await startCustomerBulkOperation(baseUrl, headers, stagedUploadUrl);
+
+    // Step 4: Monitor bulk operation
+    const operationResult = await monitorCustomerBulkOperation(baseUrl, headers, bulkOperation.id, 600000); // 10 minutes max
+
+    results.bulkOperation = operationResult;
+
+    if (operationResult.success) {
+      console.log('✅ Customer bulk operation completed successfully');
+      
+      // Step 5: Parse results
+      if (operationResult.resultUrl) {
+        const bulkResults = await parseCustomerBulkOperationResults(operationResult.resultUrl);
+        console.log(`📊 Customer bulk operation processed ${bulkResults.length} items`);
+        
+        // Categorize results by operation type
+        bulkResults.forEach(result => {
+          const isCreate = !result.customer?.id?.includes('gid://shopify/Customer/');
+          const hasErrors = result.userErrors && result.userErrors.length > 0;
+          
+          if (hasErrors) {
+            console.error(`❌ Customer bulk operation error:`, result.userErrors);
+            results.errors.push({
+              operation: isCreate ? 'create' : 'update',
+              errors: result.userErrors
+            });
+          } else if (isCreate) {
+            results.created.successful.push(result);
+          } else {
+            results.updated.successful.push(result);
+          }
+        });
+      }
+
+      results.summary = `Customer bulk operation: ${results.created.successful.length} created, ${results.updated.successful.length} updated. Errors: ${results.errors.length}`;
+      
+    } else {
+      console.error('❌ Customer bulk operation failed:', operationResult.error);
+      results.errors.push({
+        operation: 'bulk',
+        error: operationResult.error
+      });
+      results.summary = `Customer bulk operation failed: ${operationResult.error}`;
+    }
+
+  } catch (error) {
+    console.error('❌ Customer bulk mutation error:', error);
+    results.errors.push({
+      operation: 'bulk_setup',
+      error: error.message
+    });
+    results.summary = `Customer bulk operation setup failed: ${error.message}`;
+  }
+
+  console.log('✅ Bulk customer mutations completed');
+  return results;
+}
+
 export {
   mutateCustomers,
+  mutateCustomersIndividual,
   createCustomersBatch,
   updateCustomersBatch,
   mutateCustomersViaQueue,
-  handleCustomerQueueMessage
+  handleCustomerQueueMessage,
+  mutateCustomersBulk
 }; 

@@ -11,9 +11,7 @@ import { handleLocationMutations, handleLocationSync } from './location-mutation
 import { handleCustomerMutations, handleCustomerSync } from './customer-mutation-handler.js';
 import { handleProductMutations, handleProductSync } from './product-mutation-handler.js';
 import { handleComprehensiveSync, handleOptimizedSync } from './comprehensive-sync-handler.js';
-import { handleProductQueueMessage, handleInventoryUpdate, handleImageUpdate } from './product-mutations.js';
-import { handleLocationQueueMessage } from './location-mutations.js';
-import { handleCustomerQueueMessage } from './customer-mutations.js';
+import { handleInventoryUpdate, handleImageUpdate } from './product-mutations.js';
 import { getDefaultWarehouseCode } from './helpers.js';
 
 // CORS headers for all responses
@@ -400,13 +398,47 @@ async function handleDataFetch(request, env) {
 
     console.log('All mapping operations complete');
 
-    return jsonResponse({
+    // Create a summary response to avoid browser truncation with large datasets
+    const summary = {
       success: true,
       domain,
-      data,
-      mappingResults,
+      summary: {
+        unleashed: {
+          products: data.unleashed.products.length,
+          customers: data.unleashed.customers.length,
+          warehouses: data.unleashed.warehouses.length,
+          stockOnHand: data.unleashed.stockOnHand.length
+        },
+        shopify: {
+          products: data.shopify.products.length,
+          customers: data.shopify.customers.length,
+          locations: data.shopify.locations.length
+        },
+        mapping: {
+          products: {
+            toCreate: mappingResults.products.toCreate.length,
+            toUpdate: mappingResults.products.toUpdate.length,
+            toArchive: mappingResults.products.toArchive.length,
+            errors: mappingResults.products.errors.length,
+            processed: mappingResults.products.processed
+          }
+        }
+      },
+      // Include first 10 mapped products for verification (truncated to avoid browser issues)
+      sampleMappedProducts: mappingResults.products.mappingLog?.slice(0, 10) || [],
       timestamp: new Date().toISOString()
-    });
+    };
+
+    // Log full data for debugging but return summary to browser
+    console.log(`📊 FULL DATASET SUMMARY:
+      Unleashed Products: ${data.unleashed.products.length}
+      Shopify Products: ${data.shopify.products.length}
+      Products to Create: ${mappingResults.products.toCreate.length}
+      Products to Update: ${mappingResults.products.toUpdate.length}
+      Products to Archive: ${mappingResults.products.toArchive.length}
+    `);
+
+    return jsonResponse(summary);
   } catch (error) {
     console.error('Worker error:', error);
     return jsonResponse({ 
@@ -490,40 +522,15 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 
-  // Queue consumer for product mutations
+  // Minimal queue handler (required for queue bindings, but we don't process messages here)
   async queue(batch, env) {
-    // Apply log verbosity for queue consumer executions
-    applyLogVerbosity(env);
-
-    console.log(`🔄 Processing ${batch.messages.length} queue messages`);
+    console.log(`🚫 Main worker received ${batch.messages.length} queue messages - forwarding to mutation worker`);
     
+    // This shouldn't happen in normal operation since we only produce messages
+    // But Cloudflare requires a queue handler if we have queue bindings
     for (const message of batch.messages) {
-      try {
-        console.log(`Processing message: ${message.body.type}`);
-        let result;
-        if (message.body.type?.startsWith('CREATE_PRODUCT') || message.body.type?.startsWith('UPDATE_PRODUCT') || message.body.type?.startsWith('ARCHIVE_PRODUCT')) {
-          result = await handleProductQueueMessage(message.body, env);
-        } else if (message.body.type?.startsWith('CREATE_LOCATION') || message.body.type?.startsWith('UPDATE_LOCATION')) {
-          result = await handleLocationQueueMessage(message.body, env);
-        } else if (message.body.type?.startsWith('CREATE_CUSTOMER') || message.body.type?.startsWith('UPDATE_CUSTOMER')) {
-          result = await handleCustomerQueueMessage(message.body, env);
-        } else {
-          console.warn(`Unknown queue message type: ${message.body.type}`);
-          message.ack();
-          continue;
-        }
-        
-        if (result.success) {
-          console.log(`✅ Successfully processed ${message.body.type}`);
-          message.ack();
-        } else {
-          console.error(`❌ Failed to process ${message.body.type}: ${result.error}`);
-          message.retry();
-        }
-      } catch (error) {
-        console.error(`🚨 Queue message processing error:`, error);
-        message.retry();
-      }
+      console.warn(`Unexpected message in main worker: ${message.body.type}`);
+      message.ack(); // Acknowledge to prevent reprocessing
     }
   }
 }; 

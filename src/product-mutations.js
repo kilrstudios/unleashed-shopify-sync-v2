@@ -937,9 +937,20 @@ async function mutateProductsDirect(shopifyAuth, mappingResults) {
   return results;
 }
 
-// Main function: Decides between comprehensive, queue, and direct methods
-async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null, shopifyLocations = null, useComprehensive = true) {
-  // 🔒 Force queue-based product mutations for all operations to avoid sub-request limits
+// Main function: Decides between bulk, queue, and direct methods
+async function mutateProducts(shopifyAuth, mappingResults, env = null, originalDomain = null, shopifyLocations = null, useBulk = true) {
+  const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
+  
+  console.log(`📊 Product mutations strategy: ${totalOperations} total operations`);
+  
+  // Use bulk operations for large datasets (recommended for 50+ operations)
+  if (useBulk && totalOperations >= 10) {
+    console.log(`🚀 Using bulk operations for ${totalOperations} product operations`);
+    return await mutateProductsBulk(shopifyAuth, mappingResults);
+  }
+  
+  // Use queue-based approach for smaller datasets or when bulk is disabled
+  console.log(`🔄 Using queue-based approach for ${totalOperations} product operations`);
   return await mutateProductsViaQueue(env, shopifyAuth, mappingResults, originalDomain);
 }
 
@@ -2434,6 +2445,226 @@ async function linkImagesToVariants(baseUrl, headers, productId, productVariants
   console.log(`✅ Successfully linked images to variants`);
 }
 
+// Bulk product mutations (primary method for large datasets)
+async function mutateProductsBulk(shopifyAuth, mappingResults) {
+  console.log('🚀 === STARTING BULK PRODUCT MUTATIONS ===');
+  
+  const { accessToken, shopDomain } = shopifyAuth;
+  const baseUrl = `https://${shopDomain}/admin/api/2025-04`;
+  console.log(`🔗 Using Shopify API base URL: ${baseUrl}`);
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': accessToken
+  };
+
+  const results = {
+    method: 'bulk_operation',
+    bulkOperation: { success: false, operation: null, error: null },
+    created: { successful: [], failed: [] },
+    updated: { successful: [], failed: [] },
+    archived: { successful: [], failed: [] },
+    images: { successful: [], failed: [], summary: '' },
+    summary: '',
+    errors: []
+  };
+
+  try {
+    const totalOperations = mappingResults.toCreate.length + mappingResults.toUpdate.length + mappingResults.toArchive.length;
+    
+    if (totalOperations === 0) {
+      console.log('📭 No product operations to process');
+      results.summary = 'No operations to process';
+      return results;
+    }
+
+    console.log(`📊 Bulk operation summary: ${mappingResults.toCreate.length} creates, ${mappingResults.toUpdate.length} updates, ${mappingResults.toArchive.length} archives (${totalOperations} total)`);
+
+    // Step 1: Create JSONL content for bulk operation
+    console.log('📝 Creating JSONL content for bulk operation...');
+    const jsonlContent = createBulkOperationJsonl(mappingResults.toCreate, mappingResults.toUpdate);
+    
+    if (!jsonlContent || jsonlContent.trim() === '') {
+      console.log('📭 No product creates/updates to process via bulk operation');
+      
+      // Handle archives separately since they use different mutation
+      if (mappingResults.toArchive.length > 0) {
+        console.log(`🗄️ Processing ${mappingResults.toArchive.length} archives individually...`);
+        const archiveResults = await archiveProducts(baseUrl, headers, mappingResults.toArchive);
+        results.archived = archiveResults;
+        results.summary = `Archived ${archiveResults.successful.length} products individually`;
+      }
+      
+      return results;
+    }
+
+    console.log(`📄 JSONL content created: ${jsonlContent.split('\n').length} operations`);
+
+    // Step 2: Upload JSONL file to staged upload
+    const stagedUploadUrl = await uploadJsonlFile(baseUrl, headers, jsonlContent);
+
+    // Step 3: Start bulk operation
+    const bulkOperation = await startBulkOperation(baseUrl, headers, stagedUploadUrl);
+
+    // Step 4: Monitor bulk operation
+    const operationResult = await monitorBulkOperation(baseUrl, headers, bulkOperation.id, 900000); // 15 minutes max
+
+    results.bulkOperation = operationResult;
+
+    if (operationResult.success) {
+      console.log('✅ Bulk operation completed successfully');
+      
+      // Step 5: Parse results
+      if (operationResult.resultUrl) {
+        const bulkResults = await parseBulkOperationResults(operationResult.resultUrl);
+        console.log(`📊 Bulk operation processed ${bulkResults.length} items`);
+        
+        // Categorize results by operation type
+        bulkResults.forEach(result => {
+          const isCreate = !result.product?.id?.includes('gid://shopify/Product/');
+          const hasErrors = result.userErrors && result.userErrors.length > 0;
+          
+          if (hasErrors) {
+            console.error(`❌ Bulk operation error:`, result.userErrors);
+            results.errors.push({
+              operation: isCreate ? 'create' : 'update',
+              errors: result.userErrors
+            });
+          } else if (isCreate) {
+            results.created.successful.push(result);
+          } else {
+            results.updated.successful.push(result);
+          }
+        });
+      }
+
+      // Handle archives separately (different mutation type)
+      if (mappingResults.toArchive.length > 0) {
+        console.log(`🗄️ Processing ${mappingResults.toArchive.length} archives...`);
+        const archiveResults = await archiveProducts(baseUrl, headers, mappingResults.toArchive);
+        results.archived = archiveResults;
+      }
+
+      // Step 6: Post-sync image processing for bulk operations
+      if (operationResult.resultUrl && bulkResults && bulkResults.length > 0) {
+        console.log('🖼️ Starting post-sync image processing for bulk operation results...');
+        const imageResults = await processBulkImages(baseUrl, headers, bulkResults, mappingResults);
+        results.images = imageResults;
+      } else {
+        console.log('⚠️ No bulk results to process for images');
+        results.images = { successful: [], failed: [], summary: 'No bulk results to process' };
+      }
+
+      results.summary = `Bulk operation: ${results.created.successful.length} created, ${results.updated.successful.length} updated, ${results.archived.successful.length} archived, ${results.images.successful.length} images processed. Errors: ${results.errors.length + results.images.failed.length}`;
+      
+    } else {
+      console.error('❌ Bulk operation failed:', operationResult.error);
+      results.errors.push({
+        operation: 'bulk',
+        error: operationResult.error
+      });
+      results.summary = `Bulk operation failed: ${operationResult.error}`;
+    }
+
+  } catch (error) {
+    console.error('❌ Bulk mutation error:', error);
+    results.errors.push({
+      operation: 'bulk_setup',
+      error: error.message
+    });
+    results.summary = `Bulk operation setup failed: ${error.message}`;
+  }
+
+  console.log('✅ Bulk product mutations completed');
+  return results;
+}
+
+// Process images for bulk operation results
+async function processBulkImages(baseUrl, headers, bulkResults, mappingResults) {
+  console.log('🖼️ === STARTING BULK IMAGE PROCESSING ===');
+  
+  const imageResults = {
+    successful: [],
+    failed: [],
+    summary: ''
+  };
+
+  // Create a map to match bulk results with original product data
+  const productMap = new Map();
+  
+  // Map original products by SKU for matching
+  [...mappingResults.toCreate, ...mappingResults.toUpdate].forEach(product => {
+    if (product.variants && product.variants.length > 0) {
+      product.variants.forEach(variant => {
+        productMap.set(variant.sku, product);
+      });
+    }
+  });
+
+  // Process each bulk result that has images
+  for (const bulkResult of bulkResults) {
+    try {
+      // Skip if no product in result
+      if (!bulkResult.product) continue;
+
+      // Find the original product data by matching SKUs
+      const shopifyProduct = bulkResult.product;
+      let originalProduct = null;
+      
+      if (shopifyProduct.variants && shopifyProduct.variants.nodes) {
+        for (const variant of shopifyProduct.variants.nodes) {
+          if (variant.sku && productMap.has(variant.sku)) {
+            originalProduct = productMap.get(variant.sku);
+            break;
+          }
+        }
+      }
+
+      // Skip if no original product found or no images
+      if (!originalProduct || !originalProduct.images || originalProduct.images.length === 0) {
+        continue;
+      }
+
+      console.log(`🖼️ Processing images for product: ${shopifyProduct.title}`);
+      
+      // Use the existing handleVariantImages function
+      const imageResult = await handleVariantImages(baseUrl, headers, { product: shopifyProduct }, originalProduct);
+      
+      if (imageResult && imageResult.success !== false) {
+        imageResults.successful.push({
+          productId: shopifyProduct.id,
+          productTitle: shopifyProduct.title,
+          imageCount: originalProduct.images.length,
+          result: imageResult
+        });
+        console.log(`✅ Image processing completed for: ${shopifyProduct.title}`);
+      } else {
+        imageResults.failed.push({
+          productId: shopifyProduct.id,
+          productTitle: shopifyProduct.title,
+          error: imageResult ? imageResult.error : 'Unknown image processing error'
+        });
+        console.warn(`⚠️ Image processing failed for: ${shopifyProduct.title}`, imageResult);
+      }
+
+      // Small delay between image operations to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+    } catch (error) {
+      console.error(`❌ Image processing error for bulk result:`, error);
+      imageResults.failed.push({
+        productId: bulkResult.product?.id || 'unknown',
+        productTitle: bulkResult.product?.title || 'unknown',
+        error: error.message
+      });
+    }
+  }
+
+  imageResults.summary = `Processed ${imageResults.successful.length + imageResults.failed.length} products with images: ${imageResults.successful.length} successful, ${imageResults.failed.length} failed`;
+  
+  console.log(`✅ Bulk image processing completed: ${imageResults.summary}`);
+  return imageResults;
+}
+
 export {
   mutateProducts,
   buildProductSetInput,
@@ -2451,5 +2682,7 @@ export {
   handleVariantImages,
   getProductImages,
   uploadProductImages,
-  linkImagesToVariants
+  linkImagesToVariants,
+  mutateProductsBulk,
+  processBulkImages
 }; 

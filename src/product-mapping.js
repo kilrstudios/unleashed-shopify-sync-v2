@@ -205,6 +205,7 @@ function extractProductOptions(attributeSet) {
 function groupUnleashedProducts(products) {
   const groups = new Map();
   let filteredCount = 0;
+  let duplicateSkuCount = 0;
   const filterReasons = {
     isComponent: 0,
     notSellable: 0,
@@ -213,9 +214,21 @@ function groupUnleashedProducts(products) {
   
   console.log(`Processing ${products.length} Unleashed products...`);
   
+  // Track SKUs we've already seen to detect duplicates early
+  const seenSkus = new Set();
+  
   for (const product of products) {
     const isComponent = product.IsComponent;
     const isNotSellable = !product.IsSellable;
+    const sku = product.ProductCode;
+
+    // Check for duplicate SKUs first
+    if (seenSkus.has(sku)) {
+      duplicateSkuCount++;
+      console.log(`⚠️ Skipping duplicate SKU: ${sku} - ${product.ProductDescription}`);
+      continue;
+    }
+    seenSkus.add(sku);
 
     // NEW FILTERING RULE:
     //   – Skip ONLY when the product is NOT sellable.
@@ -274,25 +287,28 @@ function groupUnleashedProducts(products) {
 
   console.log(`Product filtering summary:`);
   console.log(`- Total products: ${products.length}`);
+  console.log(`- Duplicate SKUs skipped: ${duplicateSkuCount}`);
   console.log(`- Filtered out: ${filteredCount}`);
   console.log(`  - Components: ${filterReasons.isComponent}`);
   console.log(`  - Not sellable: ${filterReasons.notSellable}`);
   console.log(`  - Both: ${filterReasons.both}`);
-  console.log(`- Remaining for sync: ${products.length - filteredCount}`);
+  console.log(`- Remaining for sync: ${products.length - filteredCount - duplicateSkuCount}`);
   console.log(`- Product groups created: ${groups.size}`);
 
   return {
     groupsMap: groups,
     stats: {
       totalProducts: products.length,
+      duplicateSkuCount,
       filteredCount,
       filterReasons,
-      groupsCreated: groups.size
+      groupsCreated: groups.size,
+      remainingProducts: products.length - filteredCount - duplicateSkuCount
     }
   };
 }
 
-// defaultWarehouseCode: string | null – the tenant-wide default warehouse code
+// SKU-based mapping approach - Use SKU as the master key for all matching
 async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations = [], defaultWarehouseCode = null) {
   const results = {
     toCreate: [],
@@ -301,199 +317,402 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
     skipped: [],
     processed: 0,
     errors: [],
-    details: null
+    details: null,
+    mappingLog: [] // Comprehensive JSON log for debugging
   };
 
-  try {
-    // Group Unleashed products and get stats
-    const { groupsMap: productGroupsMap, stats: groupingStats } = groupUnleashedProducts(unleashedProducts);
+  console.log('\n🎯 === STARTING SKU-BASED PRODUCT MAPPING ===');
+  console.log(`📊 Input data: ${unleashedProducts.length} Unleashed products, ${shopifyProducts.length} Shopify products`);
 
-    // Attach stats for front-end debugging
+  try {
+    // Step 1: Build comprehensive SKU maps for fast lookup
+    console.log('\n📋 Step 1: Building SKU maps...');
+    
+    // Map all Shopify products by their variant SKUs
+    const shopifySkuMap = new Map(); // SKU -> { product, variant }
+    const shopifyProductMap = new Map(); // product.id -> product
+    
+    shopifyProducts.forEach(product => {
+      shopifyProductMap.set(product.id, product);
+      (product.variants || []).forEach(variant => {
+        if (variant.sku) {
+          if (shopifySkuMap.has(variant.sku)) {
+            console.warn(`⚠️ Duplicate SKU found in Shopify: ${variant.sku} in products ${shopifySkuMap.get(variant.sku).product.id} and ${product.id}`);
+          }
+          shopifySkuMap.set(variant.sku, { product, variant });
+        }
+      });
+    });
+
+    // Map all Unleashed products by SKU (duplicates already filtered out in grouping)
+    const unleashedSkuMap = new Map(); // SKU -> unleashedProduct
+    unleashedProducts.forEach(product => {
+      if (product.ProductCode) {
+        unleashedSkuMap.set(product.ProductCode, product);
+      }
+    });
+
+    console.log(`✅ SKU maps built: ${shopifySkuMap.size} Shopify SKUs, ${unleashedSkuMap.size} Unleashed SKUs`);
+
+    // Step 2: Group Unleashed products for multi-variant products
+    console.log('\n📋 Step 2: Grouping Unleashed products...');
+    const { groupsMap: productGroupsMap, stats: groupingStats } = groupUnleashedProducts(unleashedProducts);
     results.details = groupingStats;
 
-    // Process each group (or single product)
+    // Step 3: Process each product group
+    console.log('\n📋 Step 3: Processing product groups...');
+    
     for (const [groupKey, group] of productGroupsMap.entries()) {
+      const mainProduct = group[0];
+      const groupSkus = group.map(p => p.ProductCode);
+      
+      console.log(`\n🔍 Processing group: "${groupKey}" with SKUs: [${groupSkus.join(', ')}]`);
+      
+      // Find existing Shopify products that contain any of these SKUs
+      const relatedShopifyProducts = new Set();
+      groupSkus.forEach(sku => {
+        const shopifyEntry = shopifySkuMap.get(sku);
+        if (shopifyEntry) {
+          relatedShopifyProducts.add(shopifyEntry.product);
+        }
+      });
+
+      const relatedProducts = Array.from(relatedShopifyProducts);
+      
+      const logEntry = {
+        groupKey,
+        unleashed: {
+          productCount: group.length,
+          skus: groupSkus,
+          title: getAttributeValue(mainProduct.AttributeSet, 'Product Title') || mainProduct.ProductDescription
+        },
+        shopify: {
+          relatedProducts: relatedProducts.length,
+          products: relatedProducts.map(p => ({
+            id: p.id,
+            title: p.title,
+            handle: p.handle,
+            skus: p.variants.map(v => v.sku)
+          }))
+        },
+        decision: null,
+        reasoning: []
+      };
+
       try {
-        const mainProduct = group[0];
-        const isMultiVariant = group.length > 1;
-
-        // Determine product title: prefer explicit "Product Title" attribute, otherwise fall back
-        // to Unleashed ProductDescription, then ProductName, then finally the SKU / code.
-        const productTitle = (
-          getAttributeValue(mainProduct.AttributeSet, 'Product Title')
-          || mainProduct.ProductDescription
-          || mainProduct.ProductName
-          || mainProduct.ProductCode
-        ).toString().trim();
-
-        // Generate handle based on grouping strategy
-        const handle = slugify(productTitle);
-
-        // Debug: Log handle generation and matching attempt
-        console.log(`\n🔍 Processing "${productTitle}"`);
-        console.log(`   📝 Generated handle: "${handle}"`);
-        console.log(`   📊 Is multi-variant: ${isMultiVariant} (${group.length} products in group)`);
-        console.log(`   🎯 Searching for existing Shopify product with handle: "${handle}"`);
-
-        // Find matching Shopify product
-        const matchingProduct = shopifyProducts.find(sp => sp.handle === handle);
+        // Build the Unleashed product data
+        const unleashedProductData = buildUnleashedProductData(group, shopifyLocations, defaultWarehouseCode);
         
-        if (matchingProduct) {
-          console.log(`   ✅ MATCH FOUND: "${matchingProduct.title}" (ID: ${matchingProduct.id})`);
-          console.log(`   🔍 Will verify SKU connection...`);
+        if (relatedProducts.length === 0) {
+          // No existing Shopify products found with these SKUs
+          logEntry.decision = 'CREATE';
+          logEntry.reasoning.push('No existing Shopify products found with matching SKUs');
+          
+          console.log(`   🆕 CREATE: No existing products found for SKUs [${groupSkus.join(', ')}]`);
+          results.toCreate.push(unleashedProductData);
+          
+        } else if (relatedProducts.length === 1) {
+          // Found exactly one related product - this is the ideal case
+          const shopifyProduct = relatedProducts[0];
+          
+          // Check if ALL group SKUs are in this ONE product (perfect match)
+          const shopifySkus = new Set(shopifyProduct.variants.map(v => v.sku));
+          const allSkusInProduct = groupSkus.every(sku => shopifySkus.has(sku));
+          const extraSkusInProduct = Array.from(shopifySkus).filter(sku => !groupSkus.includes(sku));
+          
+          if (allSkusInProduct && extraSkusInProduct.length === 0) {
+            // Perfect SKU match - compare data to decide update vs skip
+            const comparison = compareProductData(unleashedProductData, shopifyProduct);
+            
+            if (comparison.hasChanges) {
+              logEntry.decision = 'UPDATE';
+              logEntry.reasoning.push('Perfect SKU match found');
+              logEntry.reasoning.push(`Changes detected: ${comparison.differences.join(', ')}`);
+              
+              console.log(`   🔄 UPDATE: Perfect SKU match, changes detected`);
+              console.log(`      Changes: ${comparison.differences.join(', ')}`);
+              
+              unleashedProductData.id = shopifyProduct.id;
+              results.toUpdate.push(unleashedProductData);
+              
+            } else {
+              logEntry.decision = 'SKIP';
+              logEntry.reasoning.push('Perfect SKU match found');
+              logEntry.reasoning.push('No changes detected - data is identical');
+              
+              console.log(`   ✅ SKIP: Perfect SKU match, no changes needed`);
+              results.skipped.push({
+                title: shopifyProduct.title,
+                id: shopifyProduct.id,
+                skus: groupSkus,
+                reason: 'identical_data',
+                needsPostSync: comparison.needsPostSync
+              });
+            }
+            
+          } else {
+            // Partial SKU match - complex scenario
+            if (!allSkusInProduct) {
+              logEntry.decision = 'CREATE';
+              logEntry.reasoning.push('Partial SKU match - some SKUs missing from existing product');
+              logEntry.reasoning.push(`Missing SKUs: ${groupSkus.filter(sku => !shopifySkus.has(sku)).join(', ')}`);
+              
+              console.log(`   🆕 CREATE: Partial SKU match - some SKUs not in existing product`);
+              console.log(`      Missing SKUs: ${groupSkus.filter(sku => !shopifySkus.has(sku)).join(', ')}`);
+              results.toCreate.push(unleashedProductData);
+              
+            } else {
+              // All our SKUs are in the product, but product has extra SKUs
+              logEntry.decision = 'UPDATE';
+              logEntry.reasoning.push('All group SKUs found in existing product');
+              logEntry.reasoning.push(`Product has extra SKUs that will be removed: ${extraSkusInProduct.join(', ')}`);
+              
+              console.log(`   🔄 UPDATE: All SKUs found but product has extras`);
+              console.log(`      Extra SKUs to remove: ${extraSkusInProduct.join(', ')}`);
+              
+              unleashedProductData.id = shopifyProduct.id;
+              unleashedProductData.variantsToRemove = shopifyProduct.variants
+                .filter(v => extraSkusInProduct.includes(v.sku))
+                .map(v => v.id);
+              
+              results.toUpdate.push(unleashedProductData);
+            }
+          }
+          
         } else {
-          console.log(`   ❌ NO MATCH: Handle "${handle}" not found in existing Shopify products`);
-          console.log(`   🆕 Will CREATE new product`);
+          // Multiple related products - complex scenario
+          logEntry.decision = 'ERROR';
+          logEntry.reasoning.push(`SKUs are spread across ${relatedProducts.length} different Shopify products`);
+          logEntry.reasoning.push('Manual review required');
+          
+          console.log(`   ❌ ERROR: SKUs spread across ${relatedProducts.length} products - manual review needed`);
+          relatedProducts.forEach((p, i) => {
+            const matchingSku = groupSkus.filter(sku => p.variants.some(v => v.sku === sku));
+            console.log(`      Product ${i + 1}: "${p.title}" (${p.id}) has SKUs: [${matchingSku.join(', ')}]`);
+          });
+          
+          results.errors.push({
+            groupKey,
+            skus: groupSkus,
+            error: `SKUs are spread across multiple Shopify products`,
+            relatedProducts: relatedProducts.map(p => ({ id: p.id, title: p.title }))
+          });
         }
 
-        // Get option names from the first product with AttributeSet
-        const productWithOptions = group.find(p => p.AttributeSet && getAttributeValue(p.AttributeSet, 'Option Names'));
-        const optionNames = productWithOptions ? 
-          parseOptionNames(getAttributeValue(productWithOptions.AttributeSet, 'Option Names')) :
-          [];
+        logEntry.unleashed.productData = unleashedProductData;
+        results.mappingLog.push(logEntry);
+        results.processed++;
 
-        // Prepare product data
-        const productData = {
-          handle,
-          title: productTitle,
-          description: mainProduct.ProductDescription,
-          product_type: mainProduct.ProductGroup?.GroupName || '',
-          vendor: mainProduct.ProductBrand?.BrandName || 'Default',
-          status: mainProduct.Obsolete ? 'ARCHIVED' : 'ACTIVE',
-          tags: [
-            mainProduct.ProductSubGroup?.GroupName,
-            mainProduct.ProductGroup?.GroupName
-          ].filter(Boolean),
-          images: (() => {
-            const temp = group.reduce((allImages, product) => {
-              // 1. Unleashed Images array (preferred)
-              if (product.Images && product.Images.length > 0) {
-                // Prefer the image marked as IsDefault=true, fallback to the first image in the array.
-                const primary = product.Images.find(img => img.IsDefault) || product.Images[0];
-                if (primary && primary.Url) {
-                  allImages.push({
-                    src: primary.Url,
-                    alt: `Image for ${product.ProductCode}`,
-                    variantSkus: [product.ProductCode]
+      } catch (error) {
+        console.error(`❌ Error processing group ${groupKey}:`, error);
+        logEntry.decision = 'ERROR';
+        logEntry.reasoning.push(`Processing error: ${error.message}`);
+        results.mappingLog.push(logEntry);
+        
+        results.errors.push({
+          groupKey,
+          skus: groupSkus,
+          error: error.message
                   });
                 }
               }
 
-              // 2. Fallback to ImageUrl field on the product
-              if (product.ImageUrl) {
-                allImages.push({
-                  src: product.ImageUrl,
-                  alt: `Image for ${product.ProductCode}`,
-                  variantSkus: [product.ProductCode]
-                });
-              }
-
-              // 3. Legacy Attachments array (if ever used)
-              if (product.Attachments && product.Attachments.length > 0) {
-                const primaryAtt = product.Attachments[0];
-                allImages.push({
-                  src: primaryAtt.DownloadUrl || primaryAtt.Url,
-                  alt: primaryAtt.Description || `Image for ${product.ProductCode}`,
-                  variantSkus: [product.ProductCode]
-                });
-              }
-
-              return allImages;
-            }, []);
-
-            // Deduplicate by canonical key, merging variantSkus sets
-            const baseKey = (url) => {
-              if (!url) return '';
-              try {
-                const u = new URL(url);
-                return u.pathname.split('/').pop().split('?')[0].toLowerCase();
-              } catch {
-                return url.split('/').pop().split('?')[0].toLowerCase();
-              }
-            };
-
-            const mapByKey = new Map();
-            temp.forEach(img => {
-              const key = baseKey(img.src);
-              if (!mapByKey.has(key)) {
-                mapByKey.set(key, { ...img, variantSkus: new Set(img.variantSkus || []) });
-              } else {
-                const existing = mapByKey.get(key);
-                (img.variantSkus || []).forEach(sku => existing.variantSkus.add(sku));
-              }
-            });
-
-            // Convert Sets back to arrays for output
-            const finalImgs = Array.from(mapByKey.values()).map(img => ({
-              src: img.src,
-              alt: img.alt,
-              variantSkus: Array.from(img.variantSkus)
-            }));
-
-            // DEBUG: list deduplicated image filenames for this product group
-            if (finalImgs.length) {
-              console.log(`\n🖼️ UNLEASHED IMAGES for group "${productTitle}" (${handle}):`);
-              finalImgs.forEach(i => {
-                const fn = (i.src || '').split('/').pop().split('?')[0];
-                console.log(`   - ${fn} → variants ${i.variantSkus.join(', ')}`);
-              });
+    // Step 4: Find products to archive
+    console.log('\n📋 Step 4: Finding products to archive...');
+    const unleashedSkuSet = new Set(unleashedProducts.map(p => p.ProductCode));
+    
+    shopifyProducts.forEach(shopifyProduct => {
+      if (shopifyProduct.status.includes('ARCHIVED')) return;
+      
+      const productSkus = shopifyProduct.variants.map(v => v.sku).filter(Boolean);
+      const hasAnyUnleashedSku = productSkus.some(sku => unleashedSkuSet.has(sku));
+      
+      if (!hasAnyUnleashedSku && productSkus.length > 0) {
+        console.log(`   🗄️ ARCHIVE: Product "${shopifyProduct.title}" - no SKUs found in Unleashed`);
+        console.log(`      Product SKUs: [${productSkus.join(', ')}]`);
+        
+        results.toArchive.push({
+          id: shopifyProduct.id,
+          title: shopifyProduct.title,
+          status: 'ARCHIVED'
+        });
+        
+        results.mappingLog.push({
+          groupKey: `ARCHIVE-${shopifyProduct.id}`,
+          shopify: {
+            product: {
+              id: shopifyProduct.id,
+              title: shopifyProduct.title,
+              skus: productSkus
             }
+          },
+          decision: 'ARCHIVE',
+          reasoning: ['No SKUs from this product found in current Unleashed dataset']
+        });
+      }
+    });
 
-            return finalImgs;
-          })(),
-          options: isMultiVariant ? 
-            optionNames.map(name => ({ name })) :
-            [{ name: 'Title' }],
-          variants: (() => {
-            const variantsMap = new Map();
+    // Final summary with comprehensive logging
+    console.log('\n🎯 === MAPPING SUMMARY ===');
+    console.log(`✅ Total groups processed: ${results.processed}`);
+    console.log(`🆕 Products to CREATE: ${results.toCreate.length}`);
+    console.log(`🔄 Products to UPDATE: ${results.toUpdate.length}`);
+    console.log(`🗄️ Products to ARCHIVE: ${results.toArchive.length}`);
+    console.log(`⏭️ Products SKIPPED: ${results.skipped.length}`);
+    console.log(`❌ ERRORS: ${results.errors.length}`);
 
-            group.forEach(product => {
+    // Log the full mapping analysis in JSON format for debugging
+    console.log('\n📊 === DETAILED MAPPING LOG (JSON) ===');
+    console.log(JSON.stringify({
+      summary: {
+        totalGroups: results.processed,
+        toCreate: results.toCreate.length,
+        toUpdate: results.toUpdate.length,
+        toArchive: results.toArchive.length,
+        skipped: results.skipped.length,
+        errors: results.errors.length
+      },
+      decisions: results.mappingLog
+    }, null, 2));
+
+  } catch (error) {
+    console.error('❌ Error in product mapping:', error);
+    results.errors.push({
+      error: error.message
+    });
+  }
+
+  return results;
+}
+
+// Helper function to build Unleashed product data
+function buildUnleashedProductData(group, shopifyLocations, defaultWarehouseCode) {
+  const mainProduct = group[0];
+
+  // CRITICAL FIX: Deduplicate the group by SKU first to handle duplicate SKUs in Unleashed
+  const uniqueProductsMap = new Map();
+  group.forEach(product => {
+    const sku = product.ProductCode;
+    if (!uniqueProductsMap.has(sku)) {
+      uniqueProductsMap.set(sku, product);
+    } else {
+      // If we have a duplicate SKU, merge the inventory data
+      const existing = uniqueProductsMap.get(sku);
+      
+      // Merge stock data if both have stock
+      if (product.StockOnHand && existing.StockOnHand) {
+        const mergedStock = [...existing.StockOnHand];
+        
+        product.StockOnHand.forEach(newStock => {
+          const existingStockIndex = mergedStock.findIndex(s => 
+            (s.WarehouseCode || s.Warehouse?.WarehouseCode) === 
+            (newStock.WarehouseCode || newStock.Warehouse?.WarehouseCode)
+          );
+          
+          if (existingStockIndex >= 0) {
+            // Add quantities together
+            const currentQty = parseInt(
+              mergedStock[existingStockIndex].QuantityAvailable ?? 
+              mergedStock[existingStockIndex].QtyAvailable ?? 
+              mergedStock[existingStockIndex].AvailableQty ??
+              mergedStock[existingStockIndex].QuantityOnHand ?? 
+              mergedStock[existingStockIndex].QtyOnHand ?? 0
+            );
+            const newQty = parseInt(
+              newStock.QuantityAvailable ?? newStock.QtyAvailable ?? newStock.AvailableQty ??
+              newStock.QuantityOnHand ?? newStock.QtyOnHand ?? 0
+            );
+            
+            mergedStock[existingStockIndex].QuantityAvailable = currentQty + newQty;
+              } else {
+            mergedStock.push(newStock);
+          }
+        });
+        
+        existing.StockOnHand = mergedStock;
+      } else if (product.StockOnHand && !existing.StockOnHand) {
+        existing.StockOnHand = product.StockOnHand;
+      }
+      
+      console.log(`🔄 Merged duplicate SKU "${sku}" inventory data`);
+    }
+  });
+
+  const deduplicatedGroup = Array.from(uniqueProductsMap.values());
+  const isMultiVariant = deduplicatedGroup.length > 1;
+
+  console.log(`📦 Group processed: ${group.length} raw products → ${deduplicatedGroup.length} unique SKUs`);
+
+  const productTitle = (
+    getAttributeValue(mainProduct.AttributeSet, 'Product Title')
+    || mainProduct.ProductDescription
+    || mainProduct.ProductName
+    || mainProduct.ProductCode
+  ).toString().trim();
+
+  const handle = slugify(productTitle);
+
+  // Get option names from the first product with AttributeSet
+  const productWithOptions = deduplicatedGroup.find(p => p.AttributeSet && getAttributeValue(p.AttributeSet, 'Option Names'));
+  const optionNames = productWithOptions ? 
+    parseOptionNames(getAttributeValue(productWithOptions.AttributeSet, 'Option Names')) :
+    [];
+
+  // Build variants from deduplicated group
+  const variants = deduplicatedGroup.map(product => {
               const variantOptions = extractVariantOptions(product.AttributeSet);
 
-              // Build a composite key from option values (undefined treated as '')
-              const vKey = [variantOptions.option1 || '', variantOptions.option2 || '', variantOptions.option3 || ''].join('|');
-
-              // Calculate inventory quantities for this product row
+    // Calculate inventory quantities
               const inventoryQuantities = [];
               if (product.StockOnHand && product.StockOnHand.length > 0) {
+                console.log(`📦 Processing inventory for ${product.ProductCode}:`, product.StockOnHand);
+                
                 product.StockOnHand.forEach(stock => {
                   let warehouseCode = stock.WarehouseCode || stock.Warehouse?.WarehouseCode;
                   if (!warehouseCode || warehouseCode.trim() === '') {
                     warehouseCode = defaultWarehouseCode;
-                    if (!warehouseCode) return; // skip if still unknown
+                    console.log(`  🏭 Using default warehouse code: ${warehouseCode}`);
+          if (!warehouseCode) return;
                   }
 
                   let matchingLocation = shopifyLocations.find(loc => loc?.metafields?.["custom.warehouse_code"] === warehouseCode);
-                  if (!matchingLocation && shopifyLocations.length > 0) matchingLocation = shopifyLocations[0];
+        if (!matchingLocation && shopifyLocations.length > 0) {
+          matchingLocation = shopifyLocations[0];
+          console.log(`  📍 No location matched warehouse ${warehouseCode}, using first location: ${matchingLocation.name}`);
+        }
 
+        if (matchingLocation) {
                   const qty = parseInt(
                     stock.QuantityAvailable ?? stock.QtyAvailable ?? stock.AvailableQty ??
                     stock.QuantityOnHand ?? stock.QtyOnHand ?? 0
                   );
 
+                    console.log(`  ➕ Adding inventory: ${qty} units to location ${matchingLocation.name} (${matchingLocation.id})`);
                   inventoryQuantities.push({
                     locationId: matchingLocation.id,
                     name: "available",
                     quantity: isNaN(qty) ? 0 : qty
                   });
-                });
-              }
+                } else {
+                  console.log(`  ⚠️ No matching location found for warehouse: ${warehouseCode}`);
+        }
+      });
+    } else {
+      console.log(`📦 No stock data for ${product.ProductCode}`);
+    }
 
-              if (variantsMap.has(vKey)) {
-                // Merge inventories into existing variant entry
-                const existing = variantsMap.get(vKey);
-                inventoryQuantities.forEach(newRow => {
-                  const match = existing.inventoryQuantities.find(r => r.locationId === newRow.locationId);
-                  if (match) {
-                    match.quantity += newRow.quantity; // accumulate
+    // Generate unique variant title to avoid "Default Title" conflicts
+    let variantTitle;
+    if (isMultiVariant) {
+      variantTitle = generateVariantTitle(product.AttributeSet);
                   } else {
-                    existing.inventoryQuantities.push({ ...newRow });
+      // For single variants, use a more specific title than "Default Title"
+      variantTitle = product.ProductCode; // Use SKU as variant title to ensure uniqueness
                   }
-                });
-              } else {
-                variantsMap.set(vKey, {
+
+    return {
                   sku: product.ProductCode,
-                  title: isMultiVariant ? generateVariantTitle(product.AttributeSet) : 'Default Title',
+      title: variantTitle,
                   price: product.DefaultSellPrice,
                   compare_at_price: null,
                   weight: product.Weight || 0,
@@ -509,7 +728,7 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                     }
                   },
                   inventoryQuantities: inventoryQuantities,
-                  inventory_levels: inventoryQuantities, // alias
+      inventory_levels: inventoryQuantities,
                   option1: variantOptions.option1,
                   option2: variantOptions.option2,
                   option3: variantOptions.option3,
@@ -524,113 +743,93 @@ async function mapProducts(unleashedProducts, shopifyProducts, shopifyLocations 
                       type: 'money'
                     };
                   }).filter(Boolean)
-                });
-              }
-            });
+    };
+  });
 
-            return Array.from(variantsMap.values());
-          })()
-        };
+  return {
+    handle,
+    title: productTitle,
+    description: mainProduct.ProductDescription,
+    product_type: mainProduct.ProductGroup?.GroupName || '',
+    vendor: mainProduct.ProductBrand?.BrandName || 'Default',
+    status: mainProduct.Obsolete ? 'ARCHIVED' : 'ACTIVE',
+    tags: [
+      mainProduct.ProductSubGroup?.GroupName,
+      mainProduct.ProductGroup?.GroupName
+    ].filter(Boolean),
+    options: isMultiVariant ? 
+      optionNames.map(name => ({ name })) :
+      [{ name: 'Title' }],
+    variants: variants,
+    images: buildProductImages(deduplicatedGroup)
+  };
+}
 
-        if (matchingProduct) {
-          // Verify SKU connection
-          console.log(`   📦 Existing Shopify product variants:`);
-          matchingProduct.variants.forEach((v, i) => {
-            console.log(`      ${i + 1}. SKU: "${v.sku}", Title: "${v.title}"`);
-          });
-          console.log(`   📦 Unleashed products in group:`);
-          group.forEach((p, i) => {
-            console.log(`      ${i + 1}. ProductCode: "${p.ProductCode}", Description: "${p.ProductDescription}"`);
-          });
-
-          // Check if all SKUs match
-          const shopifySkus = new Set(matchingProduct.variants.map(v => v.sku));
-          const unleashedSkus = new Set(group.map(p => p.ProductCode));
-          const skusMatch = [...shopifySkus].every(sku => unleashedSkus.has(sku)) &&
-                          [...unleashedSkus].every(sku => shopifySkus.has(sku));
-
-          if (skusMatch) {
-            console.log(`   🔗 SKU verification: MATCH`);
-          }
-
-          // -----------------------------------------------------
-          // Determine SKUs to ADD and REMOVE
-          // -----------------------------------------------------
-          const excessShopifyVariants = matchingProduct.variants.filter(v => !unleashedSkus.has(v.sku));
-          if (excessShopifyVariants.length) {
-            productData.variantsToRemove = excessShopifyVariants.map(v => v.id);
-            console.log(`   ➖ ${excessShopifyVariants.length} variant(s) will be REMOVED from existing product.`);
-          }
-
-          // Compare data for other field changes
-          const differences = compareProductData(productData, matchingProduct);
-
-          if (differences.hasChanges || (productData.variantsToRemove && productData.variantsToRemove.length)) {
-            console.log(`   🔄 Changes detected - will UPDATE product:`);
-            differences.differences.forEach(diff => console.log(`      - ${diff}`));
-
-            productData.id = matchingProduct.id;
-            results.toUpdate.push(productData);
-          } else {
-            console.log(`   ✅ Product is IDENTICAL to existing Shopify product (after SKU check)`);
-            results.skipped.push({
-              title: matchingProduct.title,
-              id: matchingProduct.id,
-              variantCount: matchingProduct.variants.length,
-              reason: 'identical_data',
-              needsPostSync: differences.needsPostSync || { inventory: false, images: false }
-            });
-          }
-        } else {
-          // Create new product
-          console.log(`   🆕 Will CREATE new product (no handle match)`);
-          results.toCreate.push(productData);
-        }
-
-        results.processed++;
-      } catch (error) {
-        console.error(`Error processing group ${groupKey}:`, error);
-        results.errors.push({
-          productCode: group[0].ProductCode,
-          error: error.message
+// Helper function to build product images
+function buildProductImages(group) {
+  const allImages = [];
+  
+  // Note: group should already be deduplicated by SKU
+  group.forEach(product => {
+    // 1. Unleashed Images array (preferred)
+    if (product.Images && product.Images.length > 0) {
+      const primary = product.Images.find(img => img.IsDefault) || product.Images[0];
+      if (primary && primary.Url) {
+        allImages.push({
+          src: primary.Url,
+          alt: `Image for ${product.ProductCode}`,
+          variantSkus: [product.ProductCode]
         });
       }
     }
 
-    // ---------------- ARCHIVE LOGIC REWRITE ----------------
-    // A Shopify product is archived ONLY if **none** of its variant SKUs
-    // are present in the current Unleashed dataset.
+    // 2. Fallback to ImageUrl field
+    if (product.ImageUrl) {
+      allImages.push({
+        src: product.ImageUrl,
+        alt: `Image for ${product.ProductCode}`,
+        variantSkus: [product.ProductCode]
+      });
+    }
 
-    const unleashedSkuSet = new Set(unleashedProducts.map(p => p.ProductCode));
+    // 3. Legacy Attachments array
+    if (product.Attachments && product.Attachments.length > 0) {
+      const primaryAtt = product.Attachments[0];
+      allImages.push({
+        src: primaryAtt.DownloadUrl || primaryAtt.Url,
+        alt: primaryAtt.Description || `Image for ${product.ProductCode}`,
+        variantSkus: [product.ProductCode]
+      });
+    }
+  });
 
-    const productsToArchive = shopifyProducts
-      .filter(sp => {
-        if (sp.status.includes('ARCHIVED')) return false; // already archived
-        const variantSkus = (sp.variants || []).map(v => v.sku).filter(Boolean);
-        // Keep if ANY variant SKU exists in Unleashed
-        const hasMatch = variantSkus.some(sku => unleashedSkuSet.has(sku));
-        return !hasMatch;
-      })
-      .map(sp => ({ id: sp.id, status: 'ARCHIVED' }));
+  // Deduplicate by canonical key
+  const baseKey = (url) => {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      return u.pathname.split('/').pop().split('?')[0].toLowerCase();
+    } catch {
+      return url.split('/').pop().split('?')[0].toLowerCase();
+    }
+  };
 
-    results.toArchive.push(...productsToArchive);
+  const mapByKey = new Map();
+  allImages.forEach(img => {
+    const key = baseKey(img.src);
+    if (!mapByKey.has(key)) {
+      mapByKey.set(key, { ...img, variantSkus: new Set(img.variantSkus || []) });
+    } else {
+      const existing = mapByKey.get(key);
+      (img.variantSkus || []).forEach(sku => existing.variantSkus.add(sku));
+    }
+  });
 
-    // Debug: Final mapping summary
-    console.log('\n🎯 === PRODUCT MAPPING SUMMARY ===');
-    console.log(`- Total products processed: ${results.processed}`);
-    console.log(`- Products to create: ${results.toCreate.length}`);
-    console.log(`- Products to update: ${results.toUpdate.length}`);
-    console.log(`- Products to archive: ${results.toArchive.length}`);
-    console.log(`- Products skipped: ${results.skipped.length}`);
-    console.log(`- Errors encountered: ${results.errors.length}`);
-  } catch (error) {
-    console.error('Error processing products:', error);
-    results.errors.push({
-      error: error.message
-    });
-  }
-
-  return results;
+  return Array.from(mapByKey.values()).map(img => ({
+    src: img.src,
+    alt: img.alt,
+    variantSkus: Array.from(img.variantSkus)
+  }));
 }
 
 export {

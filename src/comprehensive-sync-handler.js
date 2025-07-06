@@ -238,12 +238,13 @@ export async function handleComprehensiveSync(request, env) {
       // ========================================
       console.log('\n📦 Step 4: Product Sync...');
       const productStepStart = Date.now();
+      let productMappingResults = null; // Declare at higher scope
       
       try {
         // Map products
         console.log('🗺️ Step 4a: Mapping products...');
         const defaultWarehouseCode = getDefaultWarehouseCode(data.unleashed.warehouses);
-        const productMappingResults = await mapProducts(
+        productMappingResults = await mapProducts(
           data.unleashed.products,
           data.shopify.products,
           data.shopify.locations,
@@ -442,7 +443,31 @@ export async function handleComprehensiveSync(request, env) {
         console.log(`🔄 Post-Sync: ${postSync.images.successful} image updates`);
       }
 
-      return jsonResponse(results);
+      return jsonResponse({
+        success: true,
+        domain,
+        data,
+        mappingResults: productMappingResults ? {
+          toCreate: productMappingResults.toCreate.length,
+          toUpdate: productMappingResults.toUpdate.length,
+          toArchive: productMappingResults.toArchive.length,
+          skipped: productMappingResults.skipped?.length || 0,
+          errors: productMappingResults.errors.length,
+          processed: productMappingResults.processed,
+          details: productMappingResults.details || null
+        } : {
+          toCreate: 0,
+          toUpdate: 0,
+          toArchive: 0,
+          skipped: 0,
+          errors: 0,
+          processed: 0,
+          details: null
+        },
+        mappingResultsFull: productMappingResults, // full object for in-browser debugging
+        detailedMappingLog: productMappingResults?.mappingLog || [], // NEW: SKU-based mapping decisions with full reasoning
+        timestamp: new Date().toISOString()
+      });
       
     } catch (dataError) {
       console.error('❌ Data fetch failed:', dataError);

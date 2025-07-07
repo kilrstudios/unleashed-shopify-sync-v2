@@ -131,9 +131,9 @@
             return;
         }
 
-        // Get the current domain
-        const domain = window.location.hostname;
-        console.log('Current domain:', domain);
+        // Get the current domain (hardcoded for testing)
+        const domain = "glassfit-ecomm.wstd.io"; // Hardcoded for local testing
+        console.log('Using hardcoded domain for testing:', domain);
 
         // Prepare the request data
         const requestData = { domain };
@@ -201,9 +201,9 @@
             return;
         }
 
-        // Get the current domain
-        const domain = window.location.hostname;
-        console.log('Current domain:', domain);
+        // Get the current domain (hardcoded for testing)
+        const domain = "glassfit-ecomm.wstd.io"; // Hardcoded for local testing
+        console.log('Using hardcoded domain for testing:', domain);
 
         // Prepare the request data
         const requestData = { domain };
@@ -264,9 +264,9 @@
             return;
         }
 
-        // Get the current domain
-        const domain = window.location.hostname;
-        console.log('Current domain:', domain);
+        // Get the current domain (hardcoded for testing)
+        const domain = "glassfit-ecomm.wstd.io"; // Hardcoded for local testing
+        console.log('Using hardcoded domain for testing:', domain);
 
         // Prepare the request data
         const requestData = { domain };
